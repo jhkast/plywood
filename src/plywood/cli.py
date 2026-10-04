@@ -33,7 +33,7 @@ def _optimize(args: argparse.Namespace) -> int:
         crosscut_kerf=length(args.crosscut_kerf or args.kerf),
         edge_trim=length(args.trim),
         default_sheets=not args.no_default_sheets,
-        time_budget=args.time,
+        tries=args.tries,
         seed=args.seed,
     )
     result = optimize(parts, stocks, settings)
@@ -81,8 +81,8 @@ def main(argv: list[str] | None = None) -> int:
     op.add_argument("--rip-kerf", help="rip kerf (overrides --kerf)")
     op.add_argument("--crosscut-kerf", help="crosscut kerf (overrides --kerf)")
     op.add_argument("--trim", default="0", help="edge trim on every sheet edge")
-    op.add_argument("--time", type=float, default=3.0, help="search time in seconds")
-    op.add_argument("--seed", type=int, help="random seed for repeatable results")
+    op.add_argument("--tries", type=int, default=1000, help="random layouts to try after the fixed sweep")
+    op.add_argument("--seed", type=int, default=0, help="random seed (a different seed gives a different layout)")
     op.add_argument("--no-default-sheets", action="store_true", help="don't assume 4x8 sheets for unmatched thicknesses")
     op.add_argument("--out", default="out", help="output folder")
     args = ap.parse_args(argv)

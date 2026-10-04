@@ -1,3 +1,4 @@
+import json
 import random
 
 import pytest
@@ -12,7 +13,7 @@ PLY = 23 / 32 * IN
 
 def fast(**kw) -> Settings:
     """Deterministic: full heuristic sweep, no random restarts."""
-    return Settings(time_budget=30, random_iterations=0, seed=0, **kw)
+    return Settings(tries=0, **kw)
 
 
 def sheet(qty=None, length=96, width=48, thickness=PLY, tag=None, name="ply"):
@@ -47,7 +48,6 @@ def test_random_jobs_are_valid(seed):
     ]
     stocks = [sheet(), sheet(qty=2, length=40, width=30, name="offcut")]
     settings = fast(edge_trim=rng.choice([0, 0.25 * IN]))
-    settings.time_budget = 0.5  # cap the sweep for big random jobs
     r = optimize(parts, stocks, settings)
     assert check(r) == []
     total = sum(p.qty for p in parts)
@@ -199,3 +199,92 @@ def test_no_cut_when_leftover_is_narrower_than_kerf():
     assert check(r) == [] and len(lay.placements) == 4
     assert lay.cuts == 3
     assert all(seg.size > 0 for st in lay.steps for seg in st.segments)
+
+
+# ---------------------------------------------------------------- repeatable results, saved plans
+
+
+def _job():
+    rng = random.Random(7)
+    parts = [part(f"p{i}", rng.uniform(4, 40), rng.uniform(4, 30), qty=rng.randint(1, 3)) for i in range(12)]
+    return parts, [sheet(), sheet(qty=1, length=40, width=30, name="offcut")]
+
+
+def test_same_inputs_same_layout_in_a_new_process():
+    import json
+    import os
+    import subprocess
+    import sys
+
+    code = (
+        "import json, sys; sys.path.insert(0, 'tests'); from test_optimize import _job, Settings; "
+        "from plywood.core.optimize import optimize; p, s = _job(); "
+        "print(json.dumps(optimize(p, s, Settings(tries=200)).plan))"
+    )
+    runs = [
+        subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True,
+                       env={**os.environ, "PYTHONHASHSEED": seed}).stdout
+        for seed in ("1", "2")
+    ]
+    assert runs[0] == runs[1] and json.loads(runs[0])
+
+
+def test_restore_rebuilds_the_same_layout():
+    from plywood.core.optimize import restore
+
+    parts, stocks = _job()
+    settings = Settings(tries=100)
+    r = optimize(parts, stocks, settings)
+    back = restore(parts, stocks, settings, r.plan)
+    assert check(back) == [] and back.plan == r.plan
+    assert [lay.steps for lay in back.layouts] == [lay.steps for lay in r.layouts]
+
+
+def test_restore_rejects_a_plan_that_no_longer_fits():
+    from plywood.core.guillotine import PlanError
+    from plywood.core.optimize import restore
+
+    parts, stocks = _job()
+    r = optimize(parts, stocks, fast())
+    bigger = [part(p.name, p.length / IN + 10, p.width / IN, qty=p.qty) for p in parts]
+    with pytest.raises(PlanError):
+        restore(bigger, stocks, fast(), r.plan)
+
+
+def test_browsing_one_sheet_keeps_the_others():
+    from plywood.core.optimize import browse, choose
+
+    parts, stocks = _job()
+    settings = fast()
+    r = optimize(parts, stocks, settings)
+    assert len(r.layouts) >= 2
+    pos, count = browse(parts, stocks, settings, r.plan)[0]
+    assert pos == 0 and count > 2
+    seen = {json.dumps(r.plan[0]["tree"])}
+    plan = r.plan
+    for k in range(1, 4):
+        nxt = choose(parts, stocks, settings, plan, 1, k)
+        assert check(nxt) == []
+        assert [p["tree"] for p in nxt.plan[1:]] == [p["tree"] for p in r.plan[1:]]  # other sheets untouched
+        assert sorted(p.label for p in nxt.layouts[0].placements) == sorted(p.label for p in r.layouts[0].placements)
+        assert browse(parts, stocks, settings, nxt.plan)[0] == (k, count)
+        seen.add(json.dumps(nxt.plan[0]["tree"]))
+        plan = json.loads(json.dumps(nxt.plan))  # as saved by the browser
+    assert len(seen) == 4
+    back = choose(parts, stocks, settings, plan, 1, 0)
+    assert back.plan[0]["tree"] == r.plan[0]["tree"]  # position 1 is always the optimizer's choice
+
+
+def test_look_alike_layouts_are_shown_once():
+    from plywood.core import optimize as O
+
+    # Two big panels and interchangeable stretchers: lots of layouts that differ only in stretcher order.
+    parts = [part("side", 32.5, 27, qty=2), part("stretcher", 23.75, 4, qty=2), part("rail", 23.75, 6, qty=2)]
+    settings = fast()
+    r = optimize(parts, [sheet()], settings)
+    job = O.prepare(parts, [sheet()], settings)
+    b = O._replay_all(job, r.plan)[0]
+    trees, _ = O._options(job, b, r.plan[0])
+    assert 1 < len(trees) <= len(O._ranked(job, b)) / 2
+    looks = [O._look(O.replay(json.loads(t), 0, job.stocks, settings, job.instances), settings) for t in trees]
+    assert not any(O._looks_same(looks[i], looks[j]) for i in range(len(looks)) for j in range(i))

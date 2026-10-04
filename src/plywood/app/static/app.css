@@ -164,6 +164,10 @@ code { font-size: 12px; background: var(--bg); padding: 1px 4px; border-radius: 
   .sheetsteps { margin-top: 12px; }
 }
 .sheet h3 { margin: 0 0 2px; font-size: 15px; }
+.sheettitle { display: flex; align-items: baseline; gap: 12px; }
+.layouts { margin-left: auto; display: flex; align-items: center; gap: 6px; font-size: 12px; white-space: nowrap; }
+.layouts span { min-width: 4.5em; text-align: center; font-variant-numeric: tabular-nums; }
+.layouts button { padding: 0 9px; font-size: 15px; line-height: 20px; }
 .sheet p { margin: 0 0 8px; font-size: 12.5px; }
 .svgwrap svg { height: auto; max-height: 50vh; display: block; }
 .sheetsteps { margin-top: 8px; }

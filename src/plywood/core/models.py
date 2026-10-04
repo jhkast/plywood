@@ -84,10 +84,9 @@ class Settings:
     thickness_tolerance: float = 0.5  # mm
     default_sheets: bool = True  # add unlimited 4x8 sheets for thicknesses with no stock
     min_offcut: float = 4 * INCH  # offcuts smaller than this in either dimension are scrap
-    time_budget: float = 3.0  # seconds of search
-    random_iterations: int | None = None  # cap on random restarts (None = until time runs out)
+    tries: int = 1000  # random layouts tried after the fixed sweep
     priority: str = "waste"  # after fewest sheets: "waste", "balanced", or "cuts"
-    seed: int | None = None
+    seed: int = 0  # same inputs + same seed = same layout
 
 
 # ---------------------------------------------------------------- results
@@ -178,6 +177,7 @@ class Result:
     stocks: list[Stock]  # including any default sheets that were added
     iterations: int = 0
     notes: list[str] = field(default_factory=list)
+    plan: list[dict] = field(default_factory=list)  # one cutting tree per layout, JSON, for restoring it
 
     @property
     def purchased(self) -> list[Layout]:

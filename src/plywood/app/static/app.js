@@ -72,8 +72,10 @@ function plywood() {
     state: { job: '', units: 'in', denominator: 16, settings: {}, parts: [], stock: [] },
     tab: 'parts',
     result: null,
+    plan: null, // the cut list being shown, saved with the state so it reopens unchanged
     errors: {},
     busy: false,
+    switching: 0, // sheet number waiting on a layout switch
     flash: { text: '', kind: '' },
     seq: 0,
     timers: {},
@@ -86,6 +88,8 @@ function plywood() {
         try { localStorage.setItem('plywood.tab', t); } catch {}
       });
       this.state = await api('load_state');
+      this.plan = this.state.result;
+      delete this.state.result; // kept apart so a new plan doesn't count as an edit
       this.state.settings.priority ||= 'waste';
       this.state.tag_aliases ||= {};
       this.state.tag_distinct ||= [];
@@ -247,22 +251,48 @@ function plywood() {
       clearTimeout(this.timers.run);
       clearTimeout(this.timers.save);
       this.timers.run = setTimeout(() => this.run(), 450);
-      this.timers.save = setTimeout(() => api('save_state', this.state), 800);
+      this.timers.save = setTimeout(() => this.save(), 800);
+    },
+    withPlan() {
+      return { ...this.state, result: this.plan };
+    },
+    save() {
+      clearTimeout(this.timers.save);
+      return api('save_state', this.withPlan());
+    },
+    async call(method, ...args) {
+      try {
+        return await api(method, this.withPlan(), ...args);
+      } catch (err) {
+        return { ok: false, errors: [], message: 'Lost connection to Plywood: ' + err };
+      }
+    },
+    show(r) {
+      this.errors = {};
+      for (const e of r.errors || []) this.errors[`${e.table}:${e.index}:${e.field}`] = e.message;
+      this.result = r;
+      if (r.plan && JSON.stringify(r.plan) !== JSON.stringify(this.plan)) {
+        this.plan = r.plan;
+        this.save();
+      }
     },
     async run() {
       const my = ++this.seq;
       this.busy = true;
-      let r;
-      try {
-        r = await api('optimize', this.state);
-      } catch (err) {
-        r = { ok: false, errors: [], message: 'Lost connection to Plywood: ' + err };
-      }
+      const r = await this.call('optimize');
       if (my !== this.seq) return; // a newer edit superseded this run
       this.busy = false;
-      this.errors = {};
-      for (const e of r.errors || []) this.errors[`${e.table}:${e.index}:${e.field}`] = e.message;
-      this.result = r;
+      this.show(r);
+    },
+    async choose(s, position) {
+      if (position < 0 || position >= s.options || this.switching) return;
+      const my = ++this.seq;
+      this.switching = s.number;
+      const r = await this.call('choose', s.number, position);
+      this.switching = 0;
+      if (my !== this.seq) return; // an edit came in meanwhile; its run wins
+      this.busy = false;
+      this.show(r);
     },
 
     // ---------------------------------------------------------------- files
@@ -325,6 +355,7 @@ function plywood() {
         denominator: this.state.denominator,
         settings: this.state.settings,
         parts: this.state.parts.filter((r) => !isBlank(r)),
+        result: this.plan,
       };
       await this.saveText(this.fileBase() + '.json', JSON.stringify(job, null, 1), 'application/json');
     },
@@ -347,16 +378,17 @@ function plywood() {
       if (job.denominator) this.state.denominator = job.denominator;
       this.state.settings = { ...this.state.settings, ...(job.settings || {}) };
       this.state.parts = job.parts.map((r) => ({ ...newRow('parts'), ...r }));
+      this.plan = job.result || null; // shown as saved unless the stock list has changed since
       this.ensureBlank('parts');
       this.say('Opened ' + file.name);
     },
     async exportCsv() {
-      const r = await api('report', this.state);
+      const r = await this.call('report');
       if (!r.ok) return this.say(r.message, 'error');
       await this.saveText(this.fileBase() + ' cut list.csv', r.csv, 'text/csv');
     },
     async printReport() {
-      const r = await api('open_report', this.state);
+      const r = await this.call('open_report');
       if (!r.ok) return this.say(r.message, 'error');
       this.say('Report opened in your browser; print it from there (Ctrl+P).');
     },

@@ -130,12 +130,15 @@ class Bin:
         else:
             near, far1 = self._cut(node, "V", pw)
             leaf, far2 = self._cut(near, "H", ph)
-        leaf.kind, leaf.item, leaf.rotated, leaf.pw, leaf.ph = "part", item, rotated, pw, ph
+        self._put(leaf, item, pw, ph, rotated)
         self.free.extend(f for f in (far1, far2) if f is not None)
+        return far1, far2
+
+    def _put(self, leaf: Node, item: Instance, pw: float, ph: float, rotated: bool) -> None:
+        leaf.kind, leaf.item, leaf.rotated, leaf.pw, leaf.ph = "part", item, rotated, pw, ph
         self.parts_area += pw * ph
         if item.tag is not None:
             self.tag = item.tag
-        return far1, far2
 
     def steps(self) -> int:
         """Number of saw steps (parallel cuts across one piece count as one step)."""
@@ -304,6 +307,72 @@ def pack_strips(
             unplaced.append(item)
 
     return Packing(bins, unplaced, stocks)
+
+
+# ---------------------------------------------------------------- saved layouts
+
+
+class PlanError(ValueError):
+    """A saved cutting tree no longer fits the current parts and stock."""
+
+
+def bin_plan(b: Bin, index: dict[int, int]):
+    """The cutting tree as plain JSON. Cuts are kept by size and parts by instance number
+    (`index` maps id(instance) to it), so geometry and steps are rebuilt by the current code.
+
+    A cut is [direction, size of the near piece, near, far] (no far when only kerf was left),
+    a part is {"i": instance number, "r": rotated}, and a free leaf is null.
+    """
+
+    def walk(n: Node):
+        if n.kind == "cut":
+            near = n.children[0]
+            size = near.h if n.direction == "H" else near.w
+            return [n.direction, size, *(walk(c) for c in n.children)]
+        if n.kind == "part":
+            return {"i": index[id(n.item)], "r": n.rotated}
+        return None
+
+    return walk(b.root)
+
+
+def replay(plan, sid: int, stocks: list[Stock], settings: Settings, instances: list[Instance], index: int = 0) -> Bin:
+    """Rebuild a bin from `bin_plan` output. Raises PlanError if it doesn't fit."""
+    b = Bin(index, sid, stocks[sid], settings)
+    if not b.free:
+        raise PlanError("stock has no usable area")
+    b.free = []
+
+    def walk(n: Node, p) -> None:
+        if p is None:
+            b.free.append(n)
+            return
+        if isinstance(p, dict):
+            item = instances[p["i"]]
+            rotated = bool(p["r"])
+            pw, ph = (item.part.width, item.part.length) if rotated else (item.part.length, item.part.width)
+            if (
+                sid not in item.allowed
+                or not b.accepts(item)
+                or rotated not in allowed_rotations(item.part, b.stock.kind)
+                or pw > n.w + EPS
+                or ph > n.h + EPS
+            ):
+                raise PlanError(f"{item.part.name} doesn't fit")
+            b._put(n, item, pw, ph, rotated)
+            return
+        direction, size, *kids = p
+        if direction not in ("H", "V") or len(kids) not in (1, 2):
+            raise PlanError("bad cut")
+        near, far = b._cut(n, direction, float(size))
+        if near is n or (far is not None) != (len(kids) == 2):
+            raise PlanError("cuts don't match")
+        walk(near, kids[0])
+        if far is not None:
+            walk(far, kids[1])
+
+    walk(b.root, plan)
+    return b
 
 
 # ---------------------------------------------------------------- tree → layout

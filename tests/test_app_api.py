@@ -6,7 +6,7 @@ def state_with(parts, stock=(), units="in"):
     s["units"] = units
     s["parts"] = [dict({"name": "", "length": "", "width": "", "thickness": "", "qty": "", "grain": "", "kind": "sheet", "tag": ""}, **p) for p in parts]
     s["stock"] = [dict({"name": "", "length": "", "width": "", "thickness": "", "qty": "", "kind": "sheet", "tag": ""}, **r) for r in stock]
-    s["settings"]["time_budget"] = 0.2
+    s["settings"]["tries"] = 50
     return s
 
 
@@ -68,3 +68,20 @@ def test_tag_aliases_apply_when_optimizing(tmp_path):
     s["tag_aliases"] = {"brich": "birch"}
     r = api(tmp_path).optimize(s)
     assert r["ok"] and "birch ply" in r["sheets"][0]["title"]
+
+
+def test_saved_cut_list_is_reused_until_inputs_change(tmp_path):
+    a = api(tmp_path)
+    s = state_with([{"name": "side", "length": "30", "width": "20", "thickness": "3/4", "qty": "5"}])
+    first = a.optimize(s)
+    s = a.convert_units(s, "mm")  # display only
+    s["result"] = first["plan"]
+    assert a.optimize(s)["plan"] == first["plan"]
+    # a different layout for sheet 1 is kept as long as nothing else changes
+    assert first["sheets"][0]["option"] == 0 and first["sheets"][0]["options"] > 1
+    other = a.choose(s, 1, 2)
+    assert other["ok"] and other["plan"]["sheets"] != first["plan"]["sheets"] and other["sheets"][0]["option"] == 2
+    s["result"] = other["plan"]
+    assert a.optimize(s)["plan"] == other["plan"]
+    s["parts"][0]["qty"] = "6"
+    assert a.optimize(s)["plan"]["key"] != first["plan"]["key"]

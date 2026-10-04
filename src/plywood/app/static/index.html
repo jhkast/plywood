@@ -162,8 +162,8 @@
           <select x-model.number="state.denominator"><option value="8">1/8"</option><option value="16">1/16"</option><option value="32">1/32"</option></select>
         </label>
         <label class="check"><input type="checkbox" x-model="state.settings.default_sheets"> Assume 4×8 sheets when no stock matches</label>
-        <label>Search time <span x-text="Number(state.settings.time_budget).toFixed(1) + ' s'"></span>
-          <input type="range" min="0.3" max="10" step="0.1" x-model.number="state.settings.time_budget">
+        <label>Layouts to try <span x-text="state.settings.tries"></span>
+          <input type="range" min="0" max="5000" step="100" x-model.number="state.settings.tries">
         </label>
       </div>
       <div class="panel output" x-show="tab === 'output'">
@@ -219,7 +219,14 @@
           <template x-for="s in result.sheets" :key="s.number">
             <article class="sheet">
               <div class="sheethead">
-                <h3 x-text="s.title"></h3>
+                <div class="sheettitle">
+                  <h3 x-text="s.title"></h3>
+                  <div class="layouts" x-show="s.options > 1">
+                    <button title="Previous layout" :disabled="s.option === 0 || !!switching" @click="choose(s, s.option - 1)">‹</button>
+                    <span x-text="(s.option + 1) + ' / ' + s.options"></span>
+                    <button title="Next layout" :disabled="s.option >= s.options - 1 || !!switching" @click="choose(s, s.option + 1)">›</button>
+                  </div>
+                </div>
                 <p class="muted" x-text="s.note"></p>
                 <div class="svgwrap" x-html="s.svg"></div>
               </div>

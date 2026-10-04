@@ -12,7 +12,7 @@ from plywood.app.api import Api
 
 STATIC = Path(__file__).parent / "static"
 TYPES = {".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".svg": "image/svg+xml"}
-METHODS = {"load_state", "save_state", "optimize", "import_parts", "import_stock", "convert_units", "report", "open_report"}
+METHODS = {"load_state", "save_state", "optimize", "choose", "import_parts", "import_stock", "convert_units", "report", "open_report"}
 
 
 def make_handler(api: Api):

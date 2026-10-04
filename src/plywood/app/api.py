@@ -6,14 +6,17 @@ mean the current display unit. Everything is parsed here, so the UI never does u
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import tempfile
 import webbrowser
+from dataclasses import asdict
 from pathlib import Path
 
-from plywood.core.models import Grain, Part, Settings, Stock, StockKind
-from plywood.core.optimize import optimize
+from plywood.core.guillotine import PlanError
+from plywood.core.models import Grain, Part, Result, Settings, Stock, StockKind
+from plywood.core.optimize import browse, choose, optimize, restore
 from plywood.core.units import Formatter, parse_length
 from plywood.core.validate import check
 from plywood.io.onshape_bom import looks_like_onshape_bom_text, read_onshape_bom_text
@@ -41,13 +44,14 @@ def default_state() -> dict:
             "allowance": "0",
             "edge_trim": "0",
             "default_sheets": True,
-            "time_budget": 1.0,
+            "tries": 1000,
             "priority": "waste",
         },
         "parts": [],
         "stock": [],
         "tag_aliases": {},  # misspelling -> tag, applied to every import and optimize
         "tag_distinct": [],  # "a | b" pairs the user said are different materials
+        "result": None,  # {"key": inputs_key(...), "sheets": Result.plan}: the cut list shown last
     }
 
 
@@ -153,8 +157,12 @@ def parse_state(state: dict) -> tuple[list[Part], list[Stock], Settings, Formatt
 
     s = state.get("settings", {})
     priority = s.get("priority") if s.get("priority") in ("waste", "balanced", "cuts") else "waste"
+    try:
+        tries = max(0, int(s.get("tries", 1000)))
+    except (TypeError, ValueError):
+        tries = 1000
     settings = Settings(
-        time_budget=float(s.get("time_budget") or 1.0),
+        tries=tries,
         default_sheets=bool(s.get("default_sheets", True)),
         priority=priority,
     )
@@ -170,6 +178,22 @@ def parse_state(state: dict) -> tuple[list[Part], list[Stock], Settings, Formatt
             errors.append({"table": "settings", "index": 0, "field": field, "message": str(e)})
     fmt = Formatter(unit, int(state.get("denominator") or 16))
     return parts, stocks, settings, fmt, errors
+
+
+def inputs_key(parts: list[Part], stocks: list[Stock], settings: Settings) -> str:
+    """Fingerprint of everything that decides the layout (not display units or precision)."""
+
+    def clean(v):
+        if isinstance(v, float):
+            return round(v, 4)
+        if isinstance(v, dict):
+            return {k: clean(x) for k, x in v.items()}
+        if isinstance(v, (list, tuple)):
+            return [clean(x) for x in v]
+        return v
+
+    data = clean([[asdict(p) for p in parts], [asdict(s) for s in stocks], asdict(settings)])
+    return hashlib.sha1(json.dumps(data, sort_keys=True).encode()).hexdigest()[:16]
 
 
 def part_row(p: Part, fmt: Formatter) -> dict:
@@ -216,6 +240,7 @@ class Api:
             state["settings"] = {**default_state()["settings"], **old}
             if "kerf" not in old and "rip_kerf" in old:  # older saves had separate kerfs
                 state["settings"]["kerf"] = old["rip_kerf"]
+            state["settings"].pop("time_budget", None)  # replaced by tries
         except (OSError, ValueError):
             pass
         return state
@@ -229,19 +254,49 @@ class Api:
 
     # ------------------------------------------------------------ optimize
 
+    def _solve(self, state: dict) -> tuple[Result, str]:
+        """The saved cut list when the inputs haven't changed since it was made, else a new one."""
+        parts, stocks, settings, _, _ = parse_state(state)
+        key = inputs_key(parts, stocks, settings)
+        saved = state.get("result") or {}
+        if saved.get("key") == key:
+            try:
+                result = restore(parts, stocks, settings, saved["sheets"])
+                if not check(result):
+                    return result, key
+            except (PlanError, KeyError, TypeError):
+                pass
+        return optimize(parts, stocks, settings), key
+
     def optimize(self, state: dict) -> dict:
         parts, stocks, settings, fmt, errors = parse_state(state)
         if errors:
             return {"ok": False, "errors": errors}
         if not parts:
             return {"ok": True, "errors": [], "empty": True}
-        result = optimize(parts, stocks, settings)
+        result, key = self._solve(state)
+        return self._response(result, fmt, key, browse(parts, stocks, settings, result.plan))
+
+    def choose(self, state: dict, number: int, position: int) -> dict:
+        """Switch one sheet to another of its layouts, keeping every other sheet as it is."""
+        parts, stocks, settings, fmt, errors = parse_state(state)
+        if errors or not parts:
+            return self.optimize(state)
+        current, key = self._solve(state)
+        try:
+            result = choose(parts, stocks, settings, current.plan, int(number), int(position))
+        except (PlanError, IndexError) as e:
+            return {"ok": False, "errors": [], "message": f"couldn't switch layouts: {e}"}
+        return self._response(result, fmt, key, browse(parts, stocks, settings, result.plan))
+
+    def _response(self, result: Result, fmt: Formatter, key: str, options: list[tuple[int, int]]) -> dict:
         problems = check(result)
         if problems:
             return {"ok": False, "errors": [], "message": "internal error: " + "; ".join(problems)}
         return {
             "ok": True,
             "errors": [],
+            "plan": {"key": key, "sheets": result.plan},
             "summary": summary_html(result, fmt, stats=False),
             "stats": {
                 "stock": len(result.layouts),
@@ -258,8 +313,10 @@ class Api:
                     "note": sheet_note(lay, fmt),
                     "svg": layout_svg(lay, fmt, relative=relative_width(lay, result.layouts), pieces=True),
                     "steps": steps_html(lay, fmt, colored=True),
+                    "option": pos,
+                    "options": count,
                 }
-                for lay in result.layouts
+                for lay, (pos, count) in zip(result.layouts, options)
             ],
         }
 
@@ -313,7 +370,7 @@ class Api:
         parts, stocks, settings, fmt, errors = parse_state(state)
         if errors or not parts:
             return {"ok": False, "message": "fix the highlighted cells first" if errors else "no parts"}
-        result = optimize(parts, stocks, settings)
+        result, _ = self._solve(state)
         return {
             "ok": True,
             "html": report_html(result, fmt, title=state.get("job") or "Cut list"),
