@@ -68,6 +68,8 @@ class Stock:
     cost: float = 0.0  # per piece, counted only for purchased stock
     tag: str | None = None
     kind: StockKind = StockKind.SHEET
+    # Edges to trim, as seen in the diagram: l/r = the ends, b/t = the long sides. None = no edges.
+    trim_edges: str | None = None
 
     @property
     def on_hand(self) -> bool:
@@ -78,12 +80,14 @@ class Stock:
 class Settings:
     rip_kerf: float = 0.125 * INCH
     crosscut_kerf: float = 0.125 * INCH
-    edge_trim: float = 0.0  # removed from every edge of a sheet before cutting
+    edge_trim: float = 0.0  # removed from each trimmed edge (stock rows choose which edges)
+    allowance: float = 0.0  # rough-cut oversize, total per dimension (parts cut this much bigger)
     thickness_tolerance: float = 0.5  # mm
     default_sheets: bool = True  # add unlimited 4x8 sheets for thicknesses with no stock
     min_offcut: float = 4 * INCH  # offcuts smaller than this in either dimension are scrap
     time_budget: float = 3.0  # seconds of search
     random_iterations: int | None = None  # cap on random restarts (None = until time runs out)
+    priority: str = "waste"  # after fewest sheets: "waste", "balanced", or "cuts"
     seed: int | None = None
 
 
@@ -121,27 +125,31 @@ class Segment:
     size: float
     kind: str  # "part", "piece" (needs more cuts), "offcut", "scrap"
     label: str = ""
+    final: tuple[float, float] | None = None  # finished part size, as oriented, when cut oversize
 
 
 @dataclass(frozen=True)
 class CutStep:
     number: int
-    direction: str  # "rip" or "crosscut"
+    direction: str  # "rip", "crosscut", or "trim" (all edges of the sheet)
     piece: Rect  # the piece being cut
     positions: tuple[float, ...]  # absolute coordinates where each kerf starts
     kerf: float
     segments: tuple[Segment, ...]
+    piece_label: str = ""  # "" for the whole stock piece, else the letter given when it was cut off
 
 
 @dataclass
 class Layout:
     number: int
     stock: Stock
-    trim: float
+    trims: tuple[float, float, float, float]  # removed from the left, right, bottom, top edges
     placements: list[Placement]
     steps: list[CutStep]
     offcuts: list[Rect]  # usable leftovers
     scrap: list[Rect]  # leftovers below min_offcut
+    tag: str | None = None  # material this piece was used as (from the stock or its parts)
+    cuts: int = 0  # saw passes
 
     @property
     def parts_area(self) -> float:

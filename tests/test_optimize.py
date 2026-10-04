@@ -134,3 +134,59 @@ def test_cut_steps_account_for_every_part():
     for lay in r.layouts:
         labels = [seg.label for step in lay.steps for seg in step.segments if seg.kind == "part"]
         assert sorted(labels) == sorted(p.label for p in lay.placements)
+
+
+def test_untagged_stock_serves_tagged_parts_one_material_per_sheet():
+    # The user's case: one untagged 6'x4' on hand, parts tagged ply and mdf.
+    scrap = Stock("6x4", 72 * IN, 48 * IN, 0.75 * IN, qty=1)
+    parts = [part("top", 27, 23.75, thickness=0.75 * IN, tag="mdf"),
+             part("side", 32.5, 27, qty=2, thickness=0.75 * IN, tag="ply")]
+    r = optimize(parts, [scrap], fast())
+    assert check(r) == [] and placed(r) == 3
+    on_hand = [lay for lay in r.layouts if lay.stock.name == "6x4"]
+    assert len(on_hand) == 1 and on_hand[0].tag in ("mdf", "ply")
+    # the rest come from default sheets of the other material, not left unplaced
+    assert all(lay.tag in ("mdf", "ply") for lay in r.layouts)
+
+
+@pytest.mark.parametrize("seed", range(6))
+def test_cut_priority_never_buys_more_and_cuts_no_more(seed):
+    rng = random.Random(seed)
+    parts = [part(f"p{i}", rng.uniform(5, 40), rng.uniform(3, 20), qty=rng.randint(1, 5)) for i in range(10)]
+    waste = optimize(parts, [sheet()], fast(priority="waste"))
+    cuts = optimize(parts, [sheet()], fast(priority="cuts"))
+    assert check(cuts) == []
+    assert len(cuts.purchased) <= len(waste.purchased)
+    assert sum(lay.cuts for lay in cuts.layouts) <= sum(lay.cuts for lay in waste.layouts)
+
+
+def test_trim_only_when_edges_are_chosen():
+    plain = optimize([part("big", 60, 40)], [sheet(cost=80)], fast(edge_trim=0.5 * IN))
+    assert plain.layouts[0].trims == (0, 0, 0, 0) and plain.layouts[0].steps[0].direction != "trim"
+    trimmed = Stock("ply", 96 * IN, 48 * IN, PLY, cost=80, trim_edges="lrbt")
+    r = optimize([part("big", 60, 40)], [trimmed], fast(edge_trim=0.5 * IN))
+    lay = r.layouts[0]
+    assert check(r) == [] and lay.trims == pytest.approx((0.5 * IN,) * 4)
+    assert lay.steps[0].direction == "trim" and lay.cuts >= 4
+
+
+def test_oversize_packs_rough_sizes_and_keeps_final_labels():
+    exact = fast(rip_kerf=0, crosscut_kerf=0)
+    assert len(optimize([part("q", 24, 24, qty=8)], [sheet()], exact).layouts) == 1
+    rough = fast(rip_kerf=0, crosscut_kerf=0, allowance=0.5 * IN)
+    r = optimize([part("q", 24, 24, qty=8)], [sheet()], rough)
+    assert len(r.layouts) == 3 and check(r) == []  # 24-1/2" squares: 3 per sheet
+    p = r.layouts[0].placements[0]
+    assert p.part.length == pytest.approx(24 * IN) and p.rect.w == pytest.approx(24.5 * IN)
+    finals = [seg.final for lay in r.layouts for st in lay.steps for seg in st.segments if seg.kind == "part"]
+    assert finals and all(f == pytest.approx((24 * IN, 24 * IN)) for f in finals)
+
+
+def test_trim_only_chosen_edges():
+    # 72" x 48" left over after cutting 24" off a 4x8: the right end is already clean.
+    scrap = Stock("scrap", 72 * IN, 48 * IN, PLY, qty=1, trim_edges="lbt")
+    r = optimize([part("panel", 71.5, 47)], [scrap], fast(edge_trim=0.25 * IN, rip_kerf=0, crosscut_kerf=0,
+                                                         default_sheets=False))
+    lay = r.layouts[0]
+    assert check(r) == [] and lay.trims == pytest.approx((0.25 * IN, 0, 0.25 * IN, 0.25 * IN))
+    assert lay.placements[0].rect.x == pytest.approx(0.25 * IN)

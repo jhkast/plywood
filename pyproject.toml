@@ -8,9 +8,14 @@ dependencies = []
 
 [project.scripts]
 plywood = "plywood.cli:main"
+plywood-app = "plywood.app.desktop:main"
 
 [dependency-groups]
 dev = ["pytest>=8"]
+desktop = ["pywebview>=6.2"]
+
+[tool.uv]
+default-groups = ["dev", "desktop"]
 
 [build-system]
 requires = ["uv_build>=0.9,<1"]

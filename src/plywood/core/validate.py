@@ -11,15 +11,17 @@ def check(result: Result) -> list[str]:
     s = result.settings
     problems: list[str] = []
     for lay in result.layouts:
-        lo_x, lo_y = lay.trim, lay.trim
-        hi_x, hi_y = lay.stock.length - lay.trim, lay.stock.width - lay.trim
+        left, right, bottom, top = lay.trims
+        lo_x, lo_y = left, bottom
+        hi_x, hi_y = lay.stock.length - right, lay.stock.width - top
         ps = lay.placements
         for p in ps:
             r = p.rect
             where = f"sheet {lay.number} {p.label}"
             if r.x < lo_x - EPS or r.y < lo_y - EPS or r.x + r.w > hi_x + EPS or r.y + r.h > hi_y + EPS:
                 problems.append(f"{where}: outside usable area")
-            want = (p.part.width, p.part.length) if p.rotated else (p.part.length, p.part.width)
+            a = s.allowance
+            want = (p.part.width + a, p.part.length + a) if p.rotated else (p.part.length + a, p.part.width + a)
             if abs(r.w - want[0]) > EPS or abs(r.h - want[1]) > EPS:
                 problems.append(f"{where}: size mismatch")
             if p.part.grain == Grain.LENGTH and p.rotated:
@@ -32,6 +34,9 @@ def check(result: Result) -> list[str]:
                 problems.append(f"{where}: {p.part.kind} part on {lay.stock.kind} stock")
             if abs(p.part.thickness - lay.stock.thickness) > s.thickness_tolerance:
                 problems.append(f"{where}: thickness mismatch")
+        tags = {(p.part.tag or "").strip().lower() for p in ps} - {""}
+        if len(tags) > 1:
+            problems.append(f"sheet {lay.number}: mixes materials {sorted(tags)}")
         for i, a in enumerate(ps):
             for b in ps[i + 1 :]:
                 ra, rb = a.rect, b.rect

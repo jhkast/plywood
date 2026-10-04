@@ -81,3 +81,10 @@ def test_mirrored_part_borrows_original_dims(tmp_path):
     got = {p.name: p.qty for p in bom.parts}
     assert got == {"deep drawer side": 2, "deep drawer side-Mirrored": 2}
     assert bom.skipped == ["Orphan-Mirrored"]
+
+
+def test_utf8_bom_prefix_is_ignored():
+    from plywood.io.onshape_bom import read_onshape_bom_text
+
+    bom = read_onshape_bom_text("﻿Item,Quantity,Name,Title 1\n1,3,Side,10 x 5 x 19.05 mm sheet\n")
+    assert bom.parts[0].qty == 3

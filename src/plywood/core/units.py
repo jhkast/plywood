@@ -88,6 +88,16 @@ class Formatter:
             return f"{mm:.2f}".rstrip("0").rstrip(".") + " mm"
         return format_inches(mm / MM_PER_INCH, max(self.denominator, 64))
 
+    def exact(self, mm: float) -> str:
+        """Unit-less value for an editable cell: lossless where possible (fractions down to 1/64")."""
+        if self.unit == "mm":
+            return f"{mm:.3f}".rstrip("0").rstrip(".")
+        inches = mm / MM_PER_INCH
+        ticks = inches * 64
+        if abs(ticks - round(ticks)) < 1e-3:
+            return format_inches(inches, 64).removesuffix('"')
+        return f"{inches:.4f}".rstrip("0").rstrip(".")
+
     def bare(self, mm: float) -> str:
         """Length without a unit suffix."""
         return self.length(mm).removesuffix(" mm").removesuffix('"')

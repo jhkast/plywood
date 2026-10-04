@@ -14,6 +14,7 @@ OFFCUT_STROKE = "#7d9a6d"
 SHEET_FILL = "#b9b4ab"  # shows through as kerf and scrap
 TEXT = "#2b2116"
 CUT = "#c0392b"
+PIECE = "#2d6fb3"
 
 
 def _text_block(lines: list[str], r: Rect, px, max_font: float = 14) -> str:
@@ -40,7 +41,22 @@ def _text_block(lines: list[str], r: Rect, px, max_font: float = 14) -> str:
     )
 
 
-def layout_svg(layout: Layout, fmt: Formatter, width_px: float = 900) -> str:
+def relative_width(layout: Layout, layouts: list[Layout]) -> float:
+    """Fraction of the full width that draws every layout at one scale, so an offcut looks small."""
+    longest = max(lay.stock.length for lay in layouts)
+    return max(0.15, layout.stock.length / longest)
+
+
+def layout_svg(
+    layout: Layout, fmt: Formatter, width_px: float = 900, relative: float | None = None, pieces: bool = False
+) -> str:
+    """`relative` sizes the drawing as a percentage of its container instead of fixed pixels.
+
+    Lettered pieces (A, B…) are drawn as outlines; visible when `pieces`, otherwise hidden
+    until the app highlights one.
+    """
+    if relative:
+        width_px = 640 * relative  # same label size on every sheet, readable when shown ~half-screen
     stock = layout.stock
     scale = width_px / stock.length
     height_px = stock.width * scale
@@ -50,7 +66,8 @@ def layout_svg(layout: Layout, fmt: Formatter, width_px: float = 900) -> str:
 
     out = [
         f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="-1 -1 {width_px + 2:.1f} {height_px + 2:.1f}" '
-        f'width="{width_px + 2:.0f}" height="{height_px + 2:.0f}" font-family="system-ui, sans-serif">',
+        + (f'width="{relative * 100:.1f}%" ' if relative else f'width="{width_px + 2:.0f}" height="{height_px + 2:.0f}" ')
+        + 'font-family="system-ui, sans-serif">',
         f'<rect x="0" y="0" width="{width_px:.1f}" height="{height_px:.1f}" fill="{SHEET_FILL}" stroke="#555"/>',
     ]
     for r in layout.offcuts:
@@ -68,16 +85,43 @@ def layout_svg(layout: Layout, fmt: Formatter, width_px: float = 900) -> str:
             f"</title></rect>"
         )
         out.append(_text_block([p.label, fmt.dims(p.part.length, p.part.width)], p.rect, px))
+    outlines = []
     for step in layout.steps:
         x0, y0, w0, h0 = px(step.piece)
+        if step.piece_label:
+            outlines.append(
+                f'<g class="piece" data-piece="{step.piece_label}"{"" if pieces else " opacity=\"0\""}>'
+                f'<rect x="{x0 + 1.5:.1f}" y="{y0 + 1.5:.1f}" width="{max(w0 - 3, 1):.1f}" height="{max(h0 - 3, 1):.1f}" '
+                f'fill="none" stroke="{PIECE}" stroke-width="2" stroke-dasharray="6 3"/>'
+                f'<rect x="{x0 + w0 - 19:.1f}" y="{y0 + 2:.1f}" width="17" height="14" rx="3" fill="{PIECE}"/>'
+                f'<text x="{x0 + w0 - 10.5:.1f}" y="{y0 + 9.5:.1f}" font-size="10" font-weight="700" fill="#fff" '
+                f'text-anchor="middle" dominant-baseline="middle">{step.piece_label}</text></g>'
+            )
+        if step.direction == "trim":
+            left, right, bottom, top = (t * scale for t in layout.trims)
+            xl, xr, yt, yb = x0 + left, x0 + w0 - right, y0 + top, y0 + h0 - bottom
+            lines = []
+            if left:
+                lines.append((xl, y0, xl, y0 + h0))
+            if right:
+                lines.append((xr, y0, xr, y0 + h0))
+            if top:
+                lines.append((x0, yt, x0 + w0, yt))
+            if bottom:
+                lines.append((x0, yb, x0 + w0, yb))
+            for a, b, c, d in lines:
+                out.append(f'<line data-step="{step.number}" x1="{a:.1f}" y1="{b:.1f}" x2="{c:.1f}" y2="{d:.1f}" '
+                           f'stroke="{CUT}" stroke-width="1" stroke-opacity="0.75"/>')
+            continue
         for pos in step.positions:
             if step.direction == "rip":
                 yy = (stock.width - pos - step.kerf / 2) * scale
-                out.append(f'<line x1="{x0:.1f}" y1="{yy:.1f}" x2="{x0 + w0:.1f}" y2="{yy:.1f}" stroke="{CUT}" '
-                           f'stroke-width="0.6" stroke-opacity="0.6"/>')
+                out.append(f'<line data-step="{step.number}" x1="{x0:.1f}" y1="{yy:.1f}" x2="{x0 + w0:.1f}" '
+                           f'y2="{yy:.1f}" stroke="{CUT}" stroke-width="1" stroke-opacity="0.75"/>')
             else:
                 xx = (pos + step.kerf / 2) * scale
-                out.append(f'<line x1="{xx:.1f}" y1="{y0:.1f}" x2="{xx:.1f}" y2="{y0 + h0:.1f}" stroke="{CUT}" '
-                           f'stroke-width="0.6" stroke-opacity="0.6"/>')
+                out.append(f'<line data-step="{step.number}" x1="{xx:.1f}" y1="{y0:.1f}" x2="{xx:.1f}" '
+                           f'y2="{y0 + h0:.1f}" stroke="{CUT}" stroke-width="1" stroke-opacity="0.75"/>')
+    out.extend(outlines)
     out.append("</svg>")
     return "\n".join(out)

@@ -5,9 +5,9 @@ from __future__ import annotations
 from collections import Counter
 from html import escape
 
-from plywood.core.models import CutStep, Layout, Result
+from plywood.core.models import CutStep, Layout, Result, Segment, StockKind
 from plywood.core.units import Formatter
-from plywood.render.svg import layout_svg
+from plywood.render.svg import layout_svg, relative_width
 
 CSS = """
 body { font-family: system-ui, sans-serif; color: #222; background: #fff; margin: 24px; }
@@ -17,38 +17,63 @@ table { border-collapse: collapse; margin: 8px 0 16px; }
 td, th { border-bottom: 1px solid #ddd; padding: 4px 10px; text-align: left; font-variant-numeric: tabular-nums; }
 .warn { background: #fff3cd; border: 1px solid #e0c060; padding: 8px 12px; margin: 12px 0; }
 .sheet { page-break-before: always; margin-top: 32px; }
-.sheet svg { max-width: 100%; height: auto; }
-ol.steps li { margin: 3px 0; }
-.seg-part { font-weight: 600; } .seg-offcut { color: #4b7a3a; } .seg-scrap { color: #999; }
+.sheet svg { height: auto; }
+ol.steps { list-style: none; padding: 0; margin: 8px 0; }
+ol.steps li { display: grid; grid-template-columns: 22px max-content 14px 1fr; gap: 6px; margin: 0 0 6px; align-items: start; }
+.arrow { color: #888; }
+.final { color: #6b5a3e; font-weight: 400; }
+ol.steps .num { flex: none; width: 22px; height: 22px; border-radius: 50%; background: #c0392b; color: #fff;
+  font-size: 12px; font-weight: 700; display: grid; place-items: center; margin-top: 1px; }
+.chips { display: flex; flex-wrap: wrap; gap: 5px; }
+.chip { border-radius: 4px; padding: 1px 7px; font-size: 13px; border: 1px solid transparent; }
+.chip.part { background: #ead7b0; color: #2b2116; }
+.chip.piece, .chip.source { border-color: #7a5a2b; color: inherit; }
+.chip.offcut { background: #e3ecdc; color: #2f4a25; }
+.chip.scrap { color: #888; border-color: #ccc; border-style: dashed; }
 @media print { body { margin: 0; } .sheet { margin-top: 0; } }
 """
 
 
-def _segment_html(step: CutStep, fmt: Formatter) -> str:
-    parts = []
-    for seg in step.segments:
-        if seg.kind == "scrap" and seg.size <= 0:
-            parts.append('<span class="seg-scrap">sliver</span>')
-            continue
-        label = {"part": seg.label, "piece": "→ more cuts", "offcut": "offcut", "scrap": "scrap"}[seg.kind]
-        parts.append(f'<span class="seg-{seg.kind}">{fmt.length(seg.size)} {escape(label)}</span>')
-    return " | ".join(parts)
+def _piece_dims(seg: Segment, step: CutStep, fmt: Formatter) -> str:
+    """Full size of a piece produced by a step (the cut only sets one of its two dimensions)."""
+    w, h = (step.piece.w, seg.size) if step.direction == "rip" else (seg.size, step.piece.h)
+    return fmt.dims(w, h)
 
 
-def _steps_html(layout: Layout, fmt: Formatter) -> str:
+def _chip(seg: Segment, step: CutStep, fmt: Formatter) -> str:
+    dims = _piece_dims(seg, step, fmt)
+    name = {"part": seg.label, "piece": seg.label, "offcut": "offcut", "scrap": "scrap"}[seg.kind]
+    attr = f' data-piece="{escape(seg.label)}"' if seg.kind == "piece" else ""
+    final = f' <span class="final">→ {fmt.dims(*seg.final)}</span>' if seg.final else ""
+    return f'<span class="chip {seg.kind}"{attr}><b>{escape(name)}</b> {dims}{final}</span>'
+
+
+def steps_html(layout: Layout, fmt: Formatter) -> str:
     if not layout.steps:
-        return "<p class='muted'>No cuts needed.</p>"
+        return ""
+    whole = "Board" if layout.stock.kind == StockKind.BOARD else "Sheet"
     items = []
     for step in layout.steps:
-        piece = fmt.dims(step.piece.w, step.piece.h)
-        verb = "Rip" if step.direction == "rip" else "Crosscut"
-        n = len(step.positions)
-        cuts = f"{n} cut{'s' if n > 1 else ''}"
-        items.append(f"<li><b>{verb}</b> {piece} piece ({cuts}): {_segment_html(step, fmt)}</li>")
+        source = step.piece_label or whole
+        if step.direction == "trim":
+            left, right, bottom, top = layout.trims
+            dims = fmt.dims(step.piece.w - left - right, step.piece.h - bottom - top)
+            chips = (
+                f'<span class="chip scrap"><b>trim</b> {fmt.length(step.segments[0].size)}</span> '
+                f'<span class="chip source"><b>{whole}</b> {dims}</span>'
+            )
+        else:
+            chips = " ".join(_chip(seg, step, fmt) for seg in step.segments if seg.size > 0)
+        items.append(
+            f"<li data-step='{step.number}' data-piece='{escape(step.piece_label)}'>"
+            f"<span class='num'>{step.number}</span>"
+            f"<span class='chip source'><b>{escape(source)}</b> {fmt.dims(step.piece.w, step.piece.h)}</span>"
+            f"<span class='arrow'>→</span><span class='chips'>{chips}</span></li>"
+        )
     return f"<ol class='steps'>{''.join(items)}</ol>"
 
 
-def _summary(result: Result, fmt: Formatter) -> str:
+def summary_html(result: Result, fmt: Formatter, stats: bool = True) -> str:
     rows = []
     counts = Counter((lay.stock.name, lay.stock.thickness, lay.stock.on_hand, lay.stock.cost) for lay in result.layouts)
     for (name, thick, on_hand, cost), n in counts.items():
@@ -61,45 +86,46 @@ def _summary(result: Result, fmt: Formatter) -> str:
         + "</table>"
     )
     parts_total = sum(len(lay.placements) for lay in result.layouts)
-    stats = (
+    line = (
         f"<p>{parts_total} parts on {len(result.layouts)} pieces of stock "
         f"({len(result.purchased)} to buy"
         + (f", ${result.purchase_cost:,.2f}" if result.purchase_cost else "")
         + f"). Waste {result.waste_pct:.1f}%.</p>"
-    )
+    ) if stats else ""
     warn = ""
     if result.unplaced:
         items = "".join(
             f"<li>{escape(u.part.name)} × {u.count}: {escape(u.reason)}</li>" for u in result.unplaced
         )
         warn = f"<div class='warn'><b>Not placed:</b><ul>{items}</ul></div>"
-    defaults = [s for s in result.stocks if s.name.endswith("(default)")]
-    if defaults:
-        thick = ", ".join(sorted({fmt.thickness(s.thickness) for s in defaults}))
-        warn += f"<p class='muted'>No stock listed for {thick}; assumed 4×8 sheets.</p>"
-    return stats + warn + table
+    return line + warn + table
+
+
+def sheet_title(lay: Layout, fmt: Formatter) -> str:
+    st = lay.stock
+    src = "on hand" if st.on_hand else "buy"
+    used_as = f" as {lay.tag}" if lay.tag and not st.tag else ""
+    return (f"#{lay.number} · {st.name}{used_as} · {fmt.dims(st.length, st.width)} × "
+            f"{fmt.thickness(st.thickness)} ({src})")
+
+
+def sheet_note(lay: Layout, fmt: Formatter) -> str:
+    return f"{len(lay.placements)} parts · {lay.cuts} cuts · {lay.waste_pct:.0f}% waste"
 
 
 def report_html(result: Result, fmt: Formatter, title: str = "Cut list") -> str:
     s = result.settings
-    settings_line = (
-        f"Rip kerf {fmt.length(s.rip_kerf)}, crosscut kerf {fmt.length(s.crosscut_kerf)}, "
-        f"edge trim {fmt.length(s.edge_trim)}."
-    )
-    sheets = []
-    for lay in result.layouts:
-        st = lay.stock
-        src = "on hand" if st.on_hand else "buy"
-        trim = f" Trim {fmt.length(lay.trim)} from every edge first." if lay.trim else ""
-        sheets.append(
-            f"<section class='sheet'><h2>#{lay.number} · {escape(st.name)} · "
-            f"{fmt.dims(st.length, st.width)} × {fmt.thickness(st.thickness)} ({src})</h2>"
-            f"<p class='muted'>{len(lay.placements)} parts, waste {lay.waste_pct:.1f}%. "
-            f"Grain runs left to right.{trim}</p>"
-            f"{layout_svg(lay, fmt)}{_steps_html(lay, fmt)}</section>"
-        )
+    settings_line = f"Kerf {fmt.length(s.rip_kerf)} · edge trim {fmt.length(s.edge_trim)}"
+    if s.allowance:
+        settings_line += f" · oversize {fmt.length(s.allowance)}"
+    sheets = [
+        f"<section class='sheet'><h2>{escape(sheet_title(lay, fmt))}</h2>"
+        f"<p class='muted'>{escape(sheet_note(lay, fmt))}</p>"
+        f"{layout_svg(lay, fmt, relative=relative_width(lay, result.layouts), pieces=True)}{steps_html(lay, fmt)}</section>"
+        for lay in result.layouts
+    ]
     return (
         f"<!doctype html><html><head><meta charset='utf-8'><title>{escape(title)}</title>"
         f"<style>{CSS}</style></head><body><h1>{escape(title)}</h1>"
-        f"<p class='muted'>{settings_line}</p>{_summary(result, fmt)}{''.join(sheets)}</body></html>"
+        f"<p class='muted'>{settings_line}</p>{summary_html(result, fmt)}{''.join(sheets)}</body></html>"
     )

@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import itertools
+from dataclasses import replace
 import random
 import time
 from collections import Counter
 
-from plywood.core.guillotine import BIN_RULES, RECT_RULES, SPLIT_RULES, Instance, Packing, pack, to_layout
+from plywood.core.guillotine import BIN_RULES, RECT_RULES, SPLIT_RULES, Instance, Packing, pack, pack_strips, to_layout
 from plywood.core.matching import fits_stock, stock_matches, with_default_sheets
 from plywood.core.models import Part, Result, Settings, Stock, Unplaced
 
@@ -47,11 +48,15 @@ def optimize(parts: list[Part], stocks: list[Stock], settings: Settings | None =
         if not matches:
             unplaced.append(Unplaced(part, part.qty, f"no {part.kind} stock with matching thickness/tag"))
             continue
-        allowed = frozenset(i for i in matches if fits_stock(part, stocks[i], settings))
+        a = settings.allowance
+        rough = replace(part, length=part.length + a, width=part.width + a) if a else part
+        allowed = frozenset(i for i in matches if fits_stock(rough, stocks[i], settings))
         if not allowed:
             unplaced.append(Unplaced(part, part.qty, "too large for matching stock (check grain lock)"))
             continue
-        instances.extend(Instance(part, c + 1, allowed) for c in range(part.qty))
+        tag = (part.tag or "").strip().lower() or None
+        source = part if a else None
+        instances.extend(Instance(rough, c + 1, allowed, tag, source) for c in range(part.qty))
 
     best: Packing | None = None
     best_score = None
@@ -60,11 +65,22 @@ def optimize(parts: list[Part], stocks: list[Stock], settings: Settings | None =
     def consider(packing: Packing) -> None:
         nonlocal best, best_score, iterations
         iterations += 1
-        score = packing.score()
+        score = packing.score(settings.priority)
         if best_score is None or score < best_score:
             best, best_score = packing, score
 
     stock_orders = _stock_orders(stocks)
+
+    # Shop-style strip layouts first: cheap, and often as good as anything else.
+    def strip_key(it: Instance):
+        p = it.part
+        free = p.grain == "none"
+        width = min(p.length, p.width) if free else (p.width if p.grain == "length" else p.length)
+        return (-width, -(p.length * p.width))
+
+    for stock_order in stock_orders:
+        for exact_only in (False, True):
+            consider(pack_strips(sorted(instances, key=strip_key), stocks, stock_order, settings, exact_only))
     # Deterministic sweep: every combination of sort, rect rule, split rule, bin rule, stock order.
     for sort_name, rect_rule, split_rule, bin_rule, stock_order in itertools.product(
         SORTS, RECT_RULES, SPLIT_RULES, BIN_RULES, stock_orders
@@ -88,6 +104,10 @@ def optimize(parts: list[Part], stocks: list[Stock], settings: Settings | None =
         head = stock_order[:n_on_hand]
         rng.shuffle(head)
         stock_order[:n_on_hand] = head
+        if rng.random() < 0.3:
+            noisy = sorted(instances, key=lambda it: (-min(it.part.length, it.part.width) * noise[id(it.part)], -it.part.length))
+            consider(pack_strips(noisy, stocks, stock_order, settings, rng.random() < 0.5))
+            continue
         consider(
             pack(
                 order,
@@ -105,7 +125,7 @@ def optimize(parts: list[Part], stocks: list[Stock], settings: Settings | None =
         # On-hand first, then purchased; biggest stock first within each.
         ordered = sorted(best.bins, key=lambda b: (not b.stock.on_hand, -b.stock.length * b.stock.width, b.index))
         layouts = [to_layout(b, n + 1, settings) for n, b in enumerate(ordered)]
-        leftover = Counter(it.part for it in best.unplaced)
+        leftover = Counter(it.final for it in best.unplaced)
         unplaced += [Unplaced(p, n, "ran out of on-hand stock") for p, n in leftover.items()]
 
     return Result(layouts=layouts, unplaced=unplaced, settings=settings, stocks=stocks, iterations=iterations)

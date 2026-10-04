@@ -2,11 +2,26 @@
   "version": "0.2.0",
   "configurations": [
     {
+      "name": "Plywood app",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "plywood.app.desktop",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal"
+    },
+    {
       "name": "Optimize example cabinet",
       "type": "debugpy",
       "request": "launch",
       "module": "plywood.cli",
-      "args": ["optimize", "examples/cabinet_parts.csv", "--stock", "examples/stock.csv", "--out", "out"],
+      "args": [
+        "optimize",
+        "examples/cabinet_parts.csv",
+        "--stock",
+        "examples/stock.csv",
+        "--out",
+        "out"
+      ],
       "cwd": "${workspaceFolder}",
       "console": "integratedTerminal"
     },
@@ -15,7 +30,14 @@
       "type": "debugpy",
       "request": "launch",
       "module": "plywood.cli",
-      "args": ["optimize", "${input:partsCsv}", "--stock", "examples/stock.csv", "--out", "out"],
+      "args": [
+        "optimize",
+        "${input:partsCsv}",
+        "--stock",
+        "examples/stock.csv",
+        "--out",
+        "out"
+      ],
       "cwd": "${workspaceFolder}",
       "console": "integratedTerminal"
     }

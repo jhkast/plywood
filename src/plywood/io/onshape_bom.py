@@ -88,7 +88,7 @@ def read_onshape_bom(path: str | Path) -> BomImport:
 
 
 def read_onshape_bom_text(text: str) -> BomImport:
-    text = text.removeprefix("﻿")
+    text = text.removeprefix("\ufeff")
     rows = [row for row in csv.reader(io.StringIO(text)) if any(c.strip() for c in row)]
 
     # The header is the first row with a quantity column (exports may start with a title line).

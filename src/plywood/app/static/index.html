@@ -1,0 +1,241 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Plywood</title>
+  <link rel="stylesheet" href="app.css">
+  <script src="app.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.9/dist/cdn.min.js"></script>
+</head>
+<body>
+<div class="app" x-data="plywood()" x-cloak>
+  <header class="bar">
+    <div class="brand">Plywood</div>
+    <input class="job" x-model="state.job" aria-label="Job name" spellcheck="false">
+    <div class="spacer"></div>
+    <div class="seg" role="group" aria-label="Units">
+      <button :class="{on: state.units === 'in'}" @click="changeUnits('in')">in</button>
+      <button :class="{on: state.units === 'mm'}" @click="changeUnits('mm')">mm</button>
+    </div>
+    <button @click="newJob()">New</button>
+    <button @click="$refs.openJob.click()">Open…</button>
+    <button @click="saveJob()">Save…</button>
+    <button @click="exportCsv()">Export CSV</button>
+    <button class="primary" @click="printReport()">Print report</button>
+    <input type="file" x-ref="openJob" accept=".json" hidden @change="openJob($event)">
+    <datalist id="tag-options">
+      <template x-for="t in allTags()" :key="t"><option :value="t"></option></template>
+    </datalist>
+  </header>
+
+  <div class="flash" x-show="flash.text" x-transition.opacity :class="flash.kind" x-text="flash.text" @click="flash.text = ''"></div>
+
+  <main :style="`grid-template-columns: ${leftWidth}px 6px 1fr`">
+    <section class="left">
+      <nav class="tabs">
+        <button :class="{on: tab === 'parts'}" @click="tab = 'parts'">Parts <span class="count" x-text="countRows('parts')"></span></button>
+        <button :class="{on: tab === 'stock'}" @click="tab = 'stock'">Stock <span class="count" x-text="countRows('stock')"></span></button>
+        <button :class="{on: tab === 'settings'}" @click="tab = 'settings'">Settings</button>
+      </nav>
+
+      <!-- Parts -->
+      <div class="panel" x-show="tab === 'parts'">
+        <div class="tools">
+          <button @click="$refs.importParts.click()">Import CSV / Onshape BOM…</button>
+          <button class="ghost" @click="clearTable('parts')">Clear</button>
+          <input type="file" x-ref="importParts" accept=".csv,text/csv" hidden @change="importFile($event, 'parts')">
+        </div>
+        <table class="grid">
+          <colgroup><col><col class="dim"><col class="dim"><col class="dim"><col class="qty"><col class="grain"><col class="sel"><col class="tag"><col class="x"></colgroup>
+          <thead><tr>
+            <th>Name</th><th>Length</th><th>Width</th><th>Thick</th><th>Qty</th>
+            <th title="Grain lock: which part dimension runs along the stock grain">Grain</th><th>Kind</th><th>Tag</th><th></th>
+          </tr></thead>
+          <tbody>
+            <template x-for="(row, i) in state.parts" :key="i">
+              <tr>
+                <template x-for="f in ['name', 'length', 'width', 'thickness', 'qty']" :key="f">
+                  <td><input x-model="row[f]" :class="cellClass('parts', i, f)" :title="cellError('parts', i, f) || row[f]"
+                             :placeholder="f === 'qty' ? '1' : ''" spellcheck="false"
+                             @input="ensureBlank('parts')" @paste="paste($event, 'parts', i, f)"
+                             @keydown.enter.prevent="moveDown($event)"></td>
+                </template>
+                <td><select x-model="row.grain"><option value="">any</option><option value="length">L</option><option value="width">W</option></select></td>
+                <td><select x-model="row.kind"><option value="sheet">sheet</option><option value="board">board</option></select></td>
+                <td><input x-model="row.tag" list="tag-options" placeholder="any" spellcheck="false" @input="ensureBlank('parts')" @paste="paste($event, 'parts', i, 'tag')"></td>
+                <td><button class="del" x-show="!isBlank(row)" @click="removeRow('parts', i)" title="Remove row">×</button></td>
+              </tr>
+            </template>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- Stock -->
+      <div class="panel" x-show="tab === 'stock'">
+        <div class="tools">
+          <button @click="$refs.importStock.click()">Import CSV…</button>
+          <button class="ghost" @click="clearTable('stock')">Clear</button>
+          <input type="file" x-ref="importStock" accept=".csv,text/csv" hidden @change="importFile($event, 'stock')">
+        </div>
+        <table class="grid">
+          <colgroup><col><col class="dim"><col class="dim"><col class="dim"><col class="qty"><col class="qty"><col class="edges"><col class="sel"><col class="tag"><col class="x"></colgroup>
+          <thead><tr>
+            <th>Name</th><th>Length</th><th>Width</th><th>Thick</th>
+            <th title="Pieces on hand. Blank = buy as many as needed">On hand</th><th>Cost</th><th title="Edges to trim">Trim</th><th>Kind</th><th>Tag</th><th></th>
+          </tr></thead>
+          <tbody>
+            <template x-for="(row, i) in state.stock" :key="i">
+              <tr>
+                <template x-for="f in ['name', 'length', 'width', 'thickness', 'qty', 'cost']" :key="f">
+                  <td><input x-model="row[f]" :class="cellClass('stock', i, f)" :title="cellError('stock', i, f) || row[f]"
+                             :placeholder="stockPlaceholder(row, f)" spellcheck="false"
+                             @input="ensureBlank('stock')" @paste="paste($event, 'stock', i, f)"
+                             @keydown.enter.prevent="moveDown($event)"></td>
+                </template>
+                <td>
+                  <svg class="edges" viewBox="0 0 40 24" x-show="!isBlank(row)">
+                    <rect x="5" y="5" width="30" height="14"/>
+                    <line x1="5" y1="3" x2="35" y2="3" :class="{on: hasEdge(row, 't')}" @click="toggleEdge(row, 't')"><title>Top</title></line>
+                    <line x1="5" y1="21" x2="35" y2="21" :class="{on: hasEdge(row, 'b')}" @click="toggleEdge(row, 'b')"><title>Bottom</title></line>
+                    <line x1="3" y1="5" x2="3" y2="19" :class="{on: hasEdge(row, 'l')}" @click="toggleEdge(row, 'l')"><title>Left end</title></line>
+                    <line x1="37" y1="5" x2="37" y2="19" :class="{on: hasEdge(row, 'r')}" @click="toggleEdge(row, 'r')"><title>Right end</title></line>
+                  </svg>
+                </td>
+                <td><select x-model="row.kind"><option value="sheet">sheet</option><option value="board">board</option></select></td>
+                <td><input x-model="row.tag" list="tag-options" placeholder="any" spellcheck="false" @input="ensureBlank('stock')" @paste="paste($event, 'stock', i, 'tag')"></td>
+                <td><button class="del" x-show="!isBlank(row)" @click="removeRow('stock', i)" title="Remove row">×</button></td>
+              </tr>
+            </template>
+          </tbody>
+        </table>
+
+        <template x-if="tagInfo().length">
+          <div class="tagtable">
+            <h4>Tags in use</h4>
+            <table>
+              <tr><th>Tag</th><th>Sheet parts</th><th>Board parts</th><th>Sheet stock</th><th>Board stock</th><th></th><th>Same as…</th></tr>
+              <template x-for="t in tagInfo()" :key="t.tag">
+                <tr>
+                  <td><b x-text="t.tag"></b></td>
+                  <td x-text="t.sheetParts || '–'"></td>
+                  <td x-text="t.boardParts || '–'"></td>
+                  <td x-text="t.sheetStock || '–'"></td>
+                  <td x-text="t.boardStock || '–'"></td>
+                  <td class="muted" x-text="t.note"></td>
+                  <td>
+                    <select @change="if ($event.target.value) sameTag(t.tag, $event.target.value); $event.target.value = ''">
+                      <option value="">—</option>
+                      <template x-for="o in tagInfo().filter(o => o.tag !== t.tag)" :key="o.tag">
+                        <option :value="o.tag" x-text="o.tag"></option>
+                      </template>
+                    </select>
+                  </td>
+                </tr>
+              </template>
+            </table>
+          </div>
+        </template>
+
+        <template x-if="Object.keys(state.tag_aliases || {}).length || (state.tag_distinct || []).length">
+          <div class="tagtable">
+            <h4>Remembered tag decisions</h4>
+            <ul class="decisions">
+              <template x-for="[from, to] in Object.entries(state.tag_aliases)" :key="from">
+                <li><b x-text="from"></b> → <b x-text="to"></b> <button class="del" title="Forget" @click="forgetAlias(from)">×</button></li>
+              </template>
+              <template x-for="(key, i) in state.tag_distinct" :key="key">
+                <li><span x-text="key.replace(' | ', ' ≠ ')"></span> <button class="del" title="Forget" @click="state.tag_distinct.splice(i, 1)">×</button></li>
+              </template>
+            </ul>
+          </div>
+        </template>
+      </div>
+
+      <!-- Settings -->
+      <div class="panel settings" x-show="tab === 'settings'">
+        <label>Kerf <input x-model="state.settings.kerf" :class="cellClass('settings', 0, 'kerf')"></label>
+        <label>Edge trim <input x-model="state.settings.edge_trim" :class="cellClass('settings', 0, 'edge_trim')"></label>
+        <label>Rough-cut oversize <input x-model="state.settings.allowance" :class="cellClass('settings', 0, 'allowance')"></label>
+        <label>Fraction precision
+          <select x-model.number="state.denominator"><option value="8">1/8"</option><option value="16">1/16"</option><option value="32">1/32"</option></select>
+        </label>
+        <label class="check"><input type="checkbox" x-model="state.settings.default_sheets"> Assume 4×8 sheets when no stock matches</label>
+        <label>Search time <span x-text="Number(state.settings.time_budget).toFixed(1) + ' s'"></span>
+          <input type="range" min="0.3" max="10" step="0.1" x-model.number="state.settings.time_budget">
+        </label>
+      </div>
+    </section>
+
+    <div class="splitter" @pointerdown="startResize($event)" title="Drag to resize"></div>
+
+    <section class="right">
+      <div class="status">
+        <div class="priority">
+          <span class="muted">Prefer</span>
+          <div class="seg" role="group" aria-label="Optimization priority">
+            <button :class="{on: state.settings.priority === 'waste'}" @click="state.settings.priority = 'waste'"
+                    title="Pack leftovers into the biggest reusable offcut, even if that takes more cuts">Big offcuts</button>
+            <button :class="{on: state.settings.priority === 'balanced'}" @click="state.settings.priority = 'balanced'"
+                    title="Fewer cuts unless it costs a lot of reusable offcut">Balanced</button>
+            <button :class="{on: state.settings.priority === 'cuts'}" @click="state.settings.priority = 'cuts'"
+                    title="Fewest saw steps and cuts: rip into strips, then crosscut">Simplest cutting</button>
+          </div>
+        </div>
+        <template x-if="busy"><span class="spin">Optimizing…</span></template>
+        <template x-if="!busy && result && result.ok && result.stats">
+          <div class="stats">
+            <span><b x-text="result.stats.stock"></b> stock pieces</span>
+            <span><b x-text="result.stats.buy"></b> to buy</span>
+            <span x-show="result.stats.cost"><b x-text="'$' + result.stats.cost.toFixed(2)"></b></span>
+            <span><b x-text="result.stats.cuts"></b> cuts</span>
+            <span><b x-text="result.stats.waste.toFixed(1) + '%'"></b> waste</span>
+            <span class="warn" x-show="result.stats.unplaced"><b x-text="result.stats.unplaced"></b> not placed</span>
+          </div>
+        </template>
+      </div>
+
+      <template x-for="q in tagQuestions()" :key="q.key">
+        <div class="tagwarn">
+          <span>Are <b x-text="q.likely"></b> and <b x-text="q.other"></b> the same material?</span>
+          <button @click="sameTag(q.other, q.likely)" x-text="'Same, call it ' + q.likely"></button>
+          <button @click="sameTag(q.likely, q.other)" x-text="'Same, call it ' + q.other"></button>
+          <button @click="differentTags(q.key)">Different</button>
+        </div>
+      </template>
+
+      <template x-if="result && !result.ok">
+        <div class="problems">
+          <b x-text="result.message || ('Fix ' + result.errors.length + ' highlighted cell' + (result.errors.length > 1 ? 's' : ''))"></b>
+          <ul><template x-for="e in (result.errors || []).slice(0, 8)"><li x-text="describe(e)"></li></template></ul>
+        </div>
+      </template>
+
+      <template x-if="result && result.empty">
+        <div class="empty">
+          <h2>Add parts</h2>
+        </div>
+      </template>
+
+      <template x-if="result && result.ok && result.sheets">
+        <div>
+          <div class="summary" x-html="result.summary"></div>
+          <template x-for="s in result.sheets" :key="s.number">
+            <article class="sheet">
+              <h3 x-text="s.title"></h3>
+              <p class="muted" x-text="s.note"></p>
+              <div class="svgwrap" x-html="s.svg"></div>
+              <details :open="openSteps[s.number]" @toggle="openSteps[s.number] = $event.target.open"
+                       @mouseover="highlight($event, true)" @mouseout="highlight($event, false)">
+                <summary>Cut steps</summary>
+                <div x-html="s.steps"></div>
+              </details>
+            </article>
+          </template>
+        </div>
+      </template>
+    </section>
+  </main>
+</div>
+</body>
+</html>

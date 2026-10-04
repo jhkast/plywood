@@ -2,6 +2,19 @@
 
 Cut list optimizer for sheet goods and lumber, built for table saw, track saw and miter saw work. Every cut is a guillotine cut, and each sheet comes with a cut order you can follow.
 
+## App
+
+Open [app.py](app.py) in VS Code and press ▶, or pick **Plywood app** in Run and Debug.
+
+- **Parts and stock tables** work like a spreadsheet. You can type sizes as `23-5/8`, `600mm` or `8'`, and paste rows from Excel or Sheets.
+- **Results update as you edit.** Every sheet is drawn at the same scale, with the cut steps underneath.
+- **Your stock list and current job are saved automatically** to `%APPDATA%\plywood\state.json`.
+- **Jobs** can be saved and opened as `.json` files.
+- **Import CSV / Onshape BOM…** loads a parts CSV or an Onshape BOM export.
+- **Print report** opens a printable report in your browser.
+
+## Command line
+
 ```bash
 uv run plywood optimize examples/cabinet_parts.csv --stock examples/stock.csv
 ```
