@@ -1,0 +1,31 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Optimize example cabinet",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "plywood.cli",
+      "args": ["optimize", "examples/cabinet_parts.csv", "--stock", "examples/stock.csv", "--out", "out"],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal"
+    },
+    {
+      "name": "Optimize a parts CSV (pick file)",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "plywood.cli",
+      "args": ["optimize", "${input:partsCsv}", "--stock", "examples/stock.csv", "--out", "out"],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal"
+    }
+  ],
+  "inputs": [
+    {
+      "id": "partsCsv",
+      "type": "promptString",
+      "description": "Path to parts CSV",
+      "default": "examples/cabinet_parts.csv"
+    }
+  ]
+}

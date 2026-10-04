@@ -1,0 +1,11 @@
+name,length,width,thickness,qty,grain,tag,kind
+Side,30,23-1/4,3/4,4,length,,sheet
+Bottom,34-1/2,23-1/4,3/4,2,,,sheet
+Shelf,34-1/4,22,3/4,2,,,sheet
+Stretcher,34-1/2,4,3/4,4,,,sheet
+Back,35-1/4,30,1/4,2,length,,sheet
+Drawer side,22,5-1/2,1/2,8,length,,sheet
+Drawer front/back,15-1/2,5-1/2,1/2,8,,,sheet
+Drawer bottom,21-1/2,15,1/4,4,,,sheet
+Face frame stile,30,1-1/2,3/4,4,,,board
+Face frame rail,33,1-1/2,3/4,4,,,board
