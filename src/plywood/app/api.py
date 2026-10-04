@@ -25,7 +25,19 @@ from plywood.render.report import report_html, sheet_note, sheet_title, steps_ht
 from plywood.render.svg import layout_svg, relative_width
 
 PART_LENGTHS = ("length", "width", "thickness")
-SETTING_LENGTHS = ("kerf", "edge_trim", "allowance")
+# Lumber settings, with their defaults in inches.
+LUMBER_LENGTHS = {
+    "max_planing": "1/4",
+    "rough_cleanup": "1/8",
+    "edge_joint": "1/16",
+    "min_planer_length": "18",
+    "snipe": "4",
+    "board_width": "6",
+    "board_length": "96",
+}
+KERFS = ("sheet_kerf", "rip_kerf", "crosscut_kerf", "rough_crosscut_kerf")
+SETTING_LENGTHS = (*KERFS, "edge_trim", "allowance", *LUMBER_LENGTHS)
+POSITIVE = ("board_width", "board_length")
 
 
 def state_path() -> Path:
@@ -40,10 +52,12 @@ def default_state() -> dict:
         "units": "in",
         "denominator": 16,
         "settings": {
-            "kerf": "1/8",
+            **{k: "1/8" for k in KERFS},
             "allowance": "0",
             "edge_trim": "0",
             "default_sheets": True,
+            "default_boards": True,
+            **LUMBER_LENGTHS,
             "tries": 1000,
             "priority": "waste",
         },
@@ -150,6 +164,7 @@ def parse_state(state: dict) -> tuple[list[Part], list[Stock], Settings, Formatt
                     trim_edges=_trim_edges(row.get("trim_edges")),
                     tag=tag_of(row),
                     kind=StockKind.parse(row.get("kind")),
+                    rough=bool(row.get("rough")) and StockKind.parse(row.get("kind")) == StockKind.BOARD,
                 )
             )
         except FieldError as e:
@@ -164,16 +179,16 @@ def parse_state(state: dict) -> tuple[list[Part], list[Stock], Settings, Formatt
     settings = Settings(
         tries=tries,
         default_sheets=bool(s.get("default_sheets", True)),
+        default_boards=bool(s.get("default_boards", True)),
         priority=priority,
     )
     for field in SETTING_LENGTHS:
         text = str(s.get(field, "")).strip() or "0"
         try:
             value = parse_length(text, unit)
-            if field == "kerf":
-                settings.rip_kerf = settings.crosscut_kerf = value
-            else:
-                setattr(settings, field, value)
+            if field in POSITIVE and value <= 0:
+                raise ValueError("must be more than 0")
+            setattr(settings, field, value)
         except ValueError as e:
             errors.append({"table": "settings", "index": 0, "field": field, "message": str(e)})
     fmt = Formatter(unit, int(state.get("denominator") or 16))
@@ -185,7 +200,7 @@ def inputs_key(parts: list[Part], stocks: list[Stock], settings: Settings) -> st
 
     def clean(v):
         if isinstance(v, float):
-            return round(v, 4)
+            return round(v, 2)  # 1/100 mm: survives in/mm conversion of the cells
         if isinstance(v, dict):
             return {k: clean(x) for k, x in v.items()}
         if isinstance(v, (list, tuple)):
@@ -219,6 +234,7 @@ def stock_row(s: Stock, fmt: Formatter) -> dict:
         "trim_edges": s.trim_edges,
         "tag": s.tag or "",
         "kind": str(s.kind),
+        "rough": s.rough,
     }
 
 
@@ -238,9 +254,16 @@ class Api:
             state.update({k: v for k, v in saved.items() if k in state})
             old = saved.get("settings", {})
             state["settings"] = {**default_state()["settings"], **old}
-            if "kerf" not in old and "rip_kerf" in old:  # older saves had separate kerfs
-                state["settings"]["kerf"] = old["rip_kerf"]
+            if "sheet_kerf" not in old:  # older saves had one kerf for every saw
+                kerf = old.get("kerf") or old.get("rip_kerf") or "1/8"
+                state["settings"].update({k: kerf for k in KERFS})
+            state["settings"].pop("kerf", None)
             state["settings"].pop("time_budget", None)  # replaced by tries
+            if state.get("units") == "mm":  # new settings arrive with inch defaults
+                mm = Formatter("mm")
+                for field, default in LUMBER_LENGTHS.items():
+                    if field not in old:
+                        state["settings"][field] = mm.exact(parse_length(default, "in"))
         except (OSError, ValueError):
             pass
         return state
@@ -254,27 +277,36 @@ class Api:
 
     # ------------------------------------------------------------ optimize
 
-    def _solve(self, state: dict) -> tuple[Result, str]:
-        """The saved cut list when the inputs haven't changed since it was made, else a new one."""
+    def _solve(self, state: dict, keep: bool = False) -> tuple[Result | None, str]:
+        """The saved cut list when the inputs haven't changed since it was made, else a new one.
+
+        `keep` (opening a file or the app): always rebuild the saved cut list, even if the
+        fingerprint changed (say, an update added a setting). None if it no longer fits.
+        """
         parts, stocks, settings, _, _ = parse_state(state)
         key = inputs_key(parts, stocks, settings)
         saved = state.get("result") or {}
-        if saved.get("key") == key:
+        if saved.get("sheets") is not None and (keep or saved.get("key") == key):
             try:
                 result = restore(parts, stocks, settings, saved["sheets"])
                 if not check(result):
                     return result, key
             except (PlanError, KeyError, TypeError):
                 pass
+            if keep:
+                return None, key
         return optimize(parts, stocks, settings), key
 
-    def optimize(self, state: dict) -> dict:
+    def optimize(self, state: dict, keep: bool = False) -> dict:
         parts, stocks, settings, fmt, errors = parse_state(state)
         if errors:
             return {"ok": False, "errors": errors}
         if not parts:
             return {"ok": True, "errors": [], "empty": True}
-        result, key = self._solve(state)
+        result, key = self._solve(state, keep)
+        if result is None:
+            return {"ok": False, "errors": [], "stale": True,
+                    "message": "The saved cut list no longer fits these parts and stock."}
         return self._response(result, fmt, key, browse(parts, stocks, settings, result.plan))
 
     def choose(self, state: dict, number: int, position: int) -> dict:
@@ -300,7 +332,8 @@ class Api:
             "summary": summary_html(result, fmt, stats=False),
             "stats": {
                 "stock": len(result.layouts),
-                "buy": len(result.purchased),
+                "buy": sum(1 for lay in result.purchased if not lay.stock.find),
+                "find": sum(1 for lay in result.layouts if lay.stock.find),
                 "waste": result.waste_pct,
                 "parts": sum(len(lay.placements) for lay in result.layouts),
                 "cuts": sum(lay.cuts for lay in result.layouts),

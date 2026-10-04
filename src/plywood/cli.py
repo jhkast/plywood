@@ -29,8 +29,10 @@ def _optimize(args: argparse.Namespace) -> int:
         parts = read_parts(args.parts, unit)
     stocks = read_stock(args.stock, unit) if args.stock else []
     settings = Settings(
+        sheet_kerf=length(args.sheet_kerf or args.kerf),
         rip_kerf=length(args.rip_kerf or args.kerf),
         crosscut_kerf=length(args.crosscut_kerf or args.kerf),
+        rough_crosscut_kerf=length(args.rough_kerf or args.kerf),
         edge_trim=length(args.trim),
         default_sheets=not args.no_default_sheets,
         tries=args.tries,
@@ -74,12 +76,14 @@ def main(argv: list[str] | None = None) -> int:
     sub = ap.add_subparsers(dest="command", required=True)
     op = sub.add_parser("optimize", help="optimize a parts CSV")
     op.add_argument("parts", help="parts CSV (name,length,width,thickness,qty,grain,tag,kind) or an Onshape BOM CSV export")
-    op.add_argument("--stock", help="stock CSV: name,length,width,thickness,qty,tag,kind")
+    op.add_argument("--stock", help="stock CSV: name,length,width,thickness,qty,tag,kind,rough")
     op.add_argument("--units", choices=("in", "mm"), default="in", help="default input unit and display unit")
     op.add_argument("--denominator", type=int, default=16, help="inch fraction precision (default 16)")
-    op.add_argument("--kerf", default="1/8in", help="kerf for both rips and crosscuts")
-    op.add_argument("--rip-kerf", help="rip kerf (overrides --kerf)")
-    op.add_argument("--crosscut-kerf", help="crosscut kerf (overrides --kerf)")
+    op.add_argument("--kerf", default="1/8in", help="kerf for every saw (the options below override it)")
+    op.add_argument("--sheet-kerf", help="sheet cuts (track or table saw)")
+    op.add_argument("--rip-kerf", help="board rips (table saw)")
+    op.add_argument("--crosscut-kerf", help="board crosscuts (miter saw)")
+    op.add_argument("--rough-kerf", help="cutting rough boards into segments (jig saw)")
     op.add_argument("--trim", default="0", help="edge trim on every sheet edge")
     op.add_argument("--tries", type=int, default=1000, help="random layouts to try after the fixed sweep")
     op.add_argument("--seed", type=int, default=0, help="random seed (a different seed gives a different layout)")

@@ -23,7 +23,12 @@ _ALIASES = {
     "tag": ("tag",),
     "trim_edges": ("trim edges", "trim_edges", "trim"),
     "kind": ("kind", "type"),
+    "rough": ("rough",),
 }
+
+
+def _yes(text: str | None) -> bool:
+    return (text or "").strip().lower() in ("y", "yes", "true", "1", "x", "rough")
 
 
 def _rows(text: str) -> list[dict[str, str]]:
@@ -102,6 +107,7 @@ def read_stock_text(text: str, default_unit: str = "in") -> list[Stock]:
                 trim_edges=_edges(row.get("trim_edges")),
                 tag=row.get("tag") or None,
                 kind=StockKind.parse(row.get("kind")),
+                rough=_yes(row.get("rough")),
             )
         )
     return stocks

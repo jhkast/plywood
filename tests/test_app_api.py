@@ -40,7 +40,7 @@ def test_convert_units_round_trip(tmp_path):
     s = state_with([{"name": "side", "length": "23-5/8", "width": "600mm", "thickness": "23/32", "qty": "1"}])
     mm = a.convert_units(s, "mm")
     assert mm["parts"][0]["length"] == "600.075" and mm["parts"][0]["width"] == "600"
-    assert mm["settings"]["kerf"] == "3.175"
+    assert mm["settings"]["sheet_kerf"] == "3.175"
     back = a.convert_units(mm, "in")
     assert back["parts"][0]["length"] == "23-5/8" and back["parts"][0]["thickness"] == "23/32"
 
@@ -85,3 +85,44 @@ def test_saved_cut_list_is_reused_until_inputs_change(tmp_path):
     assert a.optimize(s)["plan"] == other["plan"]
     s["parts"][0]["qty"] = "6"
     assert a.optimize(s)["plan"]["key"] != first["plan"]["key"]
+
+
+def test_boards_through_the_app(tmp_path):
+    a = api(tmp_path)
+    board = {"kind": "board"}
+    s = state_with(
+        [dict(board, name="rail", length="30", width="3", thickness="3/4", qty="3"),
+         dict(board, name="leg", length="29", width="1-1/2", thickness="1-1/2", qty="2")],
+        [dict(board, name="cherry", length="80", width="7", thickness="1", qty="1", rough=True)],
+    )
+    r = a.optimize(s)
+    assert r["ok"] and r["stats"]["parts"] == 5 and r["stats"]["find"] >= 1
+    assert "joint &amp; plane" in r["sheets"][0]["steps"] and "Board feet" in r["summary"]
+    s["result"] = r["plan"]
+    sheet = next(x for x in r["sheets"] if x["options"] > 1)
+    other = a.choose(s, sheet["number"], 1)
+    assert other["ok"] and other["sheets"][sheet["number"] - 1]["option"] == 1
+
+
+def test_opening_keeps_the_saved_cut_list_even_after_an_update(tmp_path):
+    a = api(tmp_path)
+    s = state_with([{"name": "side", "length": "30", "width": "20", "thickness": "3/4", "qty": "5"}])
+    first = a.optimize(s)
+    s["result"] = dict(first["plan"], key="from-an-older-version")  # fingerprint no longer matches
+    kept = a.optimize(s, True)
+    assert kept["ok"] and kept["plan"]["sheets"] == first["plan"]["sheets"]
+    assert kept["plan"]["key"] == first["plan"]["key"]  # refreshed, so later runs match
+    # If it truly doesn't fit any more, say so instead of quietly recalculating.
+    s["parts"][0]["length"] = "60"
+    stale = a.optimize(s, True)
+    assert not stale["ok"] and stale["stale"]
+
+
+def test_old_single_kerf_becomes_every_saw(tmp_path):
+    import json
+
+    path = tmp_path / "state.json"
+    path.write_text(json.dumps({"settings": {"kerf": "1/2", "rip_kerf": "1/8", "crosscut_kerf": "1/8"}}))
+    st = Api(path).load_state()["settings"]
+    assert [st[k] for k in ("sheet_kerf", "rip_kerf", "crosscut_kerf", "rough_crosscut_kerf")] == ["1/2"] * 4
+    assert "kerf" not in st

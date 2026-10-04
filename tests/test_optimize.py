@@ -29,7 +29,7 @@ def placed(result):
 
 
 def test_exact_fit_without_kerf():
-    r = optimize([part("q", 24, 48, qty=4)], [sheet()], fast(rip_kerf=0, crosscut_kerf=0))
+    r = optimize([part("q", 24, 48, qty=4)], [sheet()], fast(sheet_kerf=0))
     assert len(r.layouts) == 1 and placed(r) == 4 and check(r) == []
 
 
@@ -119,8 +119,8 @@ def test_sheet_and_board_parts_never_mix():
     assert by_name == {"rail": "1x4", "cleat": "ply"}
 
 
-def test_board_part_without_board_stock_is_unplaced():
-    r = optimize([part("rail", 30, 1.5, thickness=0.75 * IN, kind=StockKind.BOARD)], [], fast())
+def test_board_part_without_board_stock_is_unplaced_when_not_assuming_boards():
+    r = optimize([part("rail", 30, 1.5, thickness=0.75 * IN, kind=StockKind.BOARD)], [], fast(default_boards=False))
     assert placed(r) == 0 and "no board stock" in r.unplaced[0].reason
 
 
@@ -171,9 +171,9 @@ def test_trim_only_when_edges_are_chosen():
 
 
 def test_oversize_packs_rough_sizes_and_keeps_final_labels():
-    exact = fast(rip_kerf=0, crosscut_kerf=0)
+    exact = fast(sheet_kerf=0)
     assert len(optimize([part("q", 24, 24, qty=8)], [sheet()], exact).layouts) == 1
-    rough = fast(rip_kerf=0, crosscut_kerf=0, allowance=0.5 * IN)
+    rough = fast(sheet_kerf=0, allowance=0.5 * IN)
     r = optimize([part("q", 24, 24, qty=8)], [sheet()], rough)
     assert len(r.layouts) == 3 and check(r) == []  # 24-1/2" squares: 3 per sheet
     p = r.layouts[0].placements[0]
@@ -185,7 +185,7 @@ def test_oversize_packs_rough_sizes_and_keeps_final_labels():
 def test_trim_only_chosen_edges():
     # 72" x 48" left over after cutting 24" off a 4x8: the right end is already clean.
     scrap = Stock("scrap", 72 * IN, 48 * IN, PLY, qty=1, trim_edges="lbt")
-    r = optimize([part("panel", 71.5, 47)], [scrap], fast(edge_trim=0.25 * IN, rip_kerf=0, crosscut_kerf=0,
+    r = optimize([part("panel", 71.5, 47)], [scrap], fast(edge_trim=0.25 * IN, sheet_kerf=0,
                                                          default_sheets=False))
     lay = r.layouts[0]
     assert check(r) == [] and lay.trims == pytest.approx((0.25 * IN, 0, 0.25 * IN, 0.25 * IN))
@@ -288,3 +288,130 @@ def test_look_alike_layouts_are_shown_once():
     assert 1 < len(trees) <= len(O._ranked(job, b)) / 2
     looks = [O._look(O.replay(json.loads(t), 0, job.stocks, settings, job.instances), settings) for t in trees]
     assert not any(O._looks_same(looks[i], looks[j]) for i in range(len(looks)) for j in range(i))
+
+
+# ---------------------------------------------------------------- lumber: planing, snipe, boards to find
+
+BOARD = StockKind.BOARD
+
+
+def board(length, width, thickness, qty=None, rough=False, name="board"):
+    return Stock(name, length * IN, width * IN, thickness * IN, qty=qty, kind=BOARD, rough=rough)
+
+
+def bpart(name, length, width, thickness, qty=1):
+    return Part(name, length * IN, width * IN, thickness * IN, qty=qty, kind=BOARD)
+
+
+def planes(r):
+    return [(lay, st) for lay in r.layouts for st in lay.steps if st.direction == "plane"]
+
+
+def test_board_at_most_max_planing_thicker():
+    p = [bpart("rail", 30, 3, 0.75)]
+    s = fast(default_boards=False)
+    assert placed(optimize(p, [board(96, 6, 1.0)], s)) == 1  # 1/4" over: fine
+    r = optimize(p, [board(96, 6, 1.25)], s)  # 1/2" over: too much
+    assert placed(r) == 0 and "no board stock" in r.unplaced[0].reason
+
+
+def test_rough_board_must_clean_up():
+    p = [bpart("rail", 30, 3, 0.75)]
+    s = fast(default_boards=False)
+    assert placed(optimize(p, [board(96, 6, 0.75, rough=True)], s)) == 0  # nothing left to joint and plane
+    r = optimize(p, [board(96, 6, 0.875, rough=True)], s)
+    assert placed(r) == 1 and check(r) == []
+
+
+def test_surfaced_board_at_part_thickness_needs_no_planing():
+    r = optimize([bpart("rail", 30, 3, 0.75, qty=2)], [board(96, 3.5, 0.75)], fast())
+    assert placed(r) == 2 and planes(r) == [] and check(r) == []
+
+
+def test_exact_thickness_beats_planing():
+    stocks = [board(96, 6, 1.0, qty=1, name="thick"), board(96, 6, 0.75, qty=1, name="exact")]
+    r = optimize([bpart("rail", 30, 3, 0.75)], stocks, fast())
+    assert [lay.stock.name for lay in r.layouts] == ["exact"] and planes(r) == []
+
+
+def test_planed_segments_have_snipe_and_planer_length():
+    s = fast()
+    r = optimize([bpart("block", 6, 2, 0.75, qty=3), bpart("rail", 40, 3, 0.75)], [board(96, 6, 1.0, rough=True)], s)
+    assert placed(r) == 4 and check(r) == []  # check() also verifies parts stay out of the snipe
+    for _, st in planes(r):
+        assert st.piece.w >= s.min_planer_length - 1e-6 and st.jointed
+
+
+def test_board_steps_crosscut_then_plane_then_cut_up():
+    r = optimize([bpart("rail", 30, 2.5, 0.75, qty=2), bpart("leg", 20, 1.5, 0.75, qty=2)],
+                 [board(96, 6, 1.0, rough=True)], fast())
+    assert check(r) == [] and planes(r)
+    for lay, st in planes(r):
+        steps = lay.steps
+        i = steps.index(st)
+        if st.piece_label:  # the segment was crosscut off the board earlier
+            assert any(st.piece_label in [g.label for g in s.segments] for s in steps[:i])
+        # the next step cuts the planed segment itself (the snipe comes off first)
+        assert steps[i + 1].piece_label == st.piece_label and steps[i + 1].direction == "crosscut"
+
+
+def test_boards_to_find_only_when_nothing_matches():
+    p = [bpart("rail", 30, 3, 0.75, qty=2), bpart("leg", 28, 1.75, 1.75, qty=4)]
+    r = optimize(p, [], fast())
+    finds = {lay.stock.name for lay in r.layouts if lay.stock.find}
+    assert finds == {"4/4 board", "8/4 board"} and check(r) == []
+    r = optimize(p, [board(96, 6, 0.75), board(96, 4, 2.0)], fast())
+    assert not any(lay.stock.find for lay in r.layouts) and placed(r) == 6 and check(r) == []
+
+
+def test_wide_part_gets_a_wider_board_to_find():
+    r = optimize([bpart("panel", 30, 9, 0.75)], [], fast())
+    assert placed(r) == 1 and r.layouts[0].stock.width >= 9 * IN + fast().edge_joint
+
+
+def test_board_plan_restores():
+    from plywood.core.optimize import restore
+
+    p = [bpart("rail", 30, 2.5, 0.75, qty=3), bpart("leg", 29, 1.5, 1.5, qty=4)]
+    stocks = [board(80, 7, 1.0, qty=2, rough=True), board(70, 6, 1.75, qty=1, rough=True)]
+    s = Settings(tries=50)
+    r = optimize(p, stocks, s)
+    back = restore(p, stocks, s, json.loads(json.dumps(r.plan)))
+    assert check(back) == [] and back.plan == r.plan and [l.steps for l in back.layouts] == [l.steps for l in r.layouts]
+
+
+@pytest.mark.parametrize("seed", range(15))
+def test_random_board_jobs_are_valid(seed):
+    rng = random.Random(seed)
+    parts = [
+        bpart(f"p{i}", rng.uniform(3, 50), rng.uniform(0.75, 5), rng.choice([0.75, 0.75, 1.0, 1.5]), qty=rng.randint(1, 3))
+        for i in range(rng.randint(1, 10))
+    ]
+    stocks = [
+        board(rng.uniform(30, 110), rng.uniform(3, 9), rng.choice([0.75, 1.0, 1.25, 1.75, 2.0]),
+              qty=rng.randint(1, 2), rough=rng.random() < 0.5, name=f"b{i}")
+        for i in range(rng.randint(0, 4))
+    ]
+    r = optimize(parts, stocks, Settings(tries=20, seed=seed))
+    assert check(r) == []
+    assert placed(r) + sum(u.count for u in r.unplaced) == sum(p.qty for p in parts)
+
+
+def test_each_saw_uses_its_own_kerf():
+    from plywood.core.optimize import restore
+
+    s = Settings(tries=0, sheet_kerf=0.1 * IN, rip_kerf=0.125 * IN, crosscut_kerf=0.09 * IN, rough_crosscut_kerf=0.2 * IN)
+    p = [bpart("rail", 30, 2.5, 0.75, qty=2), part("panel", 20, 20)]
+    stocks = [board(96, 6, 1.0, rough=True), sheet()]
+    r = optimize(p, stocks, s)
+    assert check(r) == []
+    for lay in r.layouts:
+        kerfs = {(st.direction, round(st.kerf / IN, 3)) for st in lay.steps if st.direction in ("rip", "crosscut")}
+        if lay.stock.kind == BOARD:
+            assert ("crosscut", 0.2) in kerfs  # cutting the rough board into segments: jig saw
+            assert ("crosscut", 0.09) in kerfs  # snipe and final crosscuts: miter saw
+            assert all(k in (0.125,) for d, k in kerfs if d == "rip")
+        else:
+            assert {k for _, k in kerfs} == {0.1}
+    back = restore(p, stocks, s, json.loads(json.dumps(r.plan)))
+    assert [l.steps for l in back.layouts] == [l.steps for l in r.layouts]

@@ -34,6 +34,9 @@ class Node:
     children: list[Node] = field(default_factory=list)  # [near] or [near, far]
     pw: float = 0.0  # part size on a part leaf; the leaf can be up to a kerf larger
     ph: float = 0.0
+    plane: float = 0.0  # board segment planed to this thickness before it's cut further
+    jointed: bool = False  # ...after jointing a face and an edge
+    inset: float = 0.0  # taken off the bottom edge before cutting (edge jointing)
 
 
 @dataclass(frozen=True, eq=False)
@@ -81,28 +84,35 @@ class Bin:
         self.index = index
         self.stock_id = stock_id
         self.stock = stock
-        self.rip_kerf = settings.rip_kerf
-        self.crosscut_kerf = settings.crosscut_kerf
+        if stock.kind == "board":
+            self.rip_kerf, self.crosscut_kerf = settings.rip_kerf, settings.crosscut_kerf
+            # Cutting a board into segments: a jig saw on rough lumber, else the miter saw.
+            self.segment_kerf = settings.rough_crosscut_kerf if stock.rough else settings.crosscut_kerf
+        else:
+            self.rip_kerf = self.crosscut_kerf = self.segment_kerf = settings.sheet_kerf
         self.trims = edge_trims(stock, settings)
         length, width = usable_size(stock, settings)
         self.root = Node(self.trims[0], self.trims[2], length, width)
         self.free: list[Node] = [self.root] if length > EPS and width > EPS else []
         self.parts_area = 0.0
         self.cuts = sum(1 for t in self.trims if t > 0)  # one cut per trimmed edge
+        self.planed = 0  # board segments that get planed
+        self.min_offcut = settings.min_offcut
         # An untagged piece takes on the tag of the first tagged part placed on it (one material per piece).
         self.tag = (stock.tag or "").strip().lower() or None
 
     def accepts(self, item: Instance) -> bool:
         return item.tag is None or self.tag is None or item.tag == self.tag
 
-    def _cut(self, n: Node, direction: str, size: float) -> tuple[Node, Node | None]:
+    def _cut(self, n: Node, direction: str, size: float, kerf: float | None = None) -> tuple[Node, Node | None]:
         """Cut `n` so the near piece is `size` along the cut axis.
 
         No cut when the leftover is no wider than the kerf: the blade would only make dust,
         so the near piece keeps that sliver instead.
         """
         extent = n.h if direction == "H" else n.w
-        kerf = self.rip_kerf if direction == "H" else self.crosscut_kerf
+        if kerf is None:
+            kerf = self.rip_kerf if direction == "H" else self.crosscut_kerf
         if extent - size <= kerf + EPS:
             return n, None
         far_size = extent - size - kerf
@@ -168,11 +178,14 @@ class Packing:
         used_area = sum(b.stock.length * b.stock.width for b in self.bins)
         waste = used_area - sum(b.parts_area for b in self.bins)
         sheet = max((b.stock.length * b.stock.width for b in self.bins), default=1.0)
-        largest_free = max((f.w * f.h for b in self.bins for f in b.free), default=0.0) / sheet
+        largest_free = max(
+            (f.w * f.h for b in self.bins for f in b.free if min(f.w, f.h) >= b.min_offcut), default=0.0
+        ) / sheet  # slivers narrower than a usable offcut don't count, however long
         cuts = sum(b.cuts for b in self.bins)
         steps = sum(b.steps() for b in self.bins)
         # Waste is fixed once the stock is chosen, so it only matters when on-hand pieces differ.
-        head = (len(self.unplaced), len(purchased), round(waste, 3))
+        planed = sum(b.planed for b in self.bins)  # exact thickness beats planing; fewer planer runs
+        head = (len(self.unplaced), len(purchased), planed, round(waste, 3))
         if priority == "cuts":
             return (*head, steps + cuts, -round(largest_free, 4))
         if priority == "balanced":
@@ -321,19 +334,32 @@ def bin_plan(b: Bin, index: dict[int, int]):
     (`index` maps id(instance) to it), so geometry and steps are rebuilt by the current code.
 
     A cut is [direction, size of the near piece, near, far] (no far when only kerf was left),
-    a part is {"i": instance number, "r": rotated}, and a free leaf is null.
+    a part is {"i": instance number, "r": rotated}, and a free leaf is null. A planed board
+    segment is wrapped as {"seg": {"plane": thickness, "jointed": true, "inset": edge}, "t": ...}.
     """
 
     def walk(n: Node):
         if n.kind == "cut":
             near = n.children[0]
             size = near.h if n.direction == "H" else near.w
-            return [n.direction, size, *(walk(c) for c in n.children)]
-        if n.kind == "part":
-            return {"i": index[id(n.item)], "r": n.rotated}
-        return None
+            body = [n.direction, size, *(walk(c) for c in n.children)]
+        elif n.kind == "part":
+            body = {"i": index[id(n.item)], "r": n.rotated}
+        else:
+            body = None
+        seg = {k: v for k, v in (("plane", n.plane), ("jointed", n.jointed), ("inset", n.inset)) if v}
+        return {"seg": seg, "t": body} if seg else body
 
     return walk(b.root)
+
+
+def mark_segment(b: Bin, n: Node, plane: float, jointed: bool, inset: float) -> None:
+    """Make `n` a board segment planed to `plane`, with `inset` jointed off its bottom edge."""
+    n.plane, n.jointed, n.inset = plane, jointed, inset
+    n.y += inset
+    n.h -= inset
+    if plane:
+        b.planed += 1
 
 
 def replay(plan, sid: int, stocks: list[Stock], settings: Settings, instances: list[Instance], index: int = 0) -> Bin:
@@ -343,9 +369,18 @@ def replay(plan, sid: int, stocks: list[Stock], settings: Settings, instances: l
         raise PlanError("stock has no usable area")
     b.free = []
 
-    def walk(n: Node, p) -> None:
+    def walk(n: Node, p, top: bool = False) -> None:
+        """`top`: n is the uncut rest of the board, so a crosscut here cuts off a segment."""
         if p is None:
             b.free.append(n)
+            return
+        if isinstance(p, dict) and "seg" in p:
+            seg = p["seg"]
+            inset = float(seg.get("inset", 0))
+            if b.stock.kind != "board" or not 0 <= inset < n.h:
+                raise PlanError("bad segment")
+            mark_segment(b, n, float(seg.get("plane", 0)), bool(seg.get("jointed")), inset)
+            walk(n, p["t"])
             return
         if isinstance(p, dict):
             item = instances[p["i"]]
@@ -364,14 +399,15 @@ def replay(plan, sid: int, stocks: list[Stock], settings: Settings, instances: l
         direction, size, *kids = p
         if direction not in ("H", "V") or len(kids) not in (1, 2):
             raise PlanError("bad cut")
-        near, far = b._cut(n, direction, float(size))
+        kerf = b.segment_kerf if top and direction == "V" else None
+        near, far = b._cut(n, direction, float(size), kerf)
         if near is n or (far is not None) != (len(kids) == 2):
             raise PlanError("cuts don't match")
         walk(near, kids[0])
         if far is not None:
-            walk(far, kids[1])
+            walk(far, kids[1], top and direction == "V")
 
-    walk(b.root, plan)
+    walk(b.root, plan, top=b.stock.kind == "board")
     return b
 
 
@@ -417,6 +453,20 @@ def cut_steps(root: Node, settings: Settings) -> list[CutStep]:
     stack = [root]
     while stack:
         n = stack.pop()
+        if n.plane:
+            steps.append(
+                CutStep(
+                    number=len(steps) + 1,
+                    direction="plane",
+                    piece=Rect(n.x, n.y - n.inset, n.w, n.h + n.inset),  # as it comes off the board
+                    positions=(),
+                    kerf=0.0,
+                    segments=(),
+                    piece_label=names.get(id(n), ""),
+                    thickness=n.plane,
+                    jointed=n.jointed,
+                )
+            )
         if n.kind != "cut":
             continue
         positions: list[float] = []
@@ -476,6 +526,6 @@ def to_layout(b: Bin, number: int, settings: Settings) -> Layout:
     steps = cut_steps(b.root, settings)
     if any(t > 0 for t in b.trims):
         whole = Rect(0.0, 0.0, b.stock.length, b.stock.width)
-        trim = CutStep(1, "trim", whole, (), settings.rip_kerf, (Segment(settings.edge_trim, "scrap"),))
+        trim = CutStep(1, "trim", whole, (), b.rip_kerf, (Segment(settings.edge_trim, "scrap"),))
         steps = [trim] + [replace(s, number=s.number + 1) for s in steps]
     return Layout(number, b.stock, b.trims, placements, steps, offcuts, scrap, b.tag, b.cuts)

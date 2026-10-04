@@ -49,6 +49,13 @@ button {
 button:hover { border-color: var(--accent); }
 button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 600; }
 button.ghost { border-color: transparent; background: transparent; color: var(--muted); }
+.menus { display: flex; gap: 8px; }
+.menu { position: relative; }
+.menu > button.on { border-color: var(--accent); }
+.menu .items { position: absolute; right: 0; top: calc(100% + 4px); z-index: 20; display: grid; min-width: 210px;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 4px; box-shadow: 0 6px 20px rgba(0,0,0,.18); }
+.menu .items button { border: 0; background: none; text-align: left; padding: 6px 10px; border-radius: 5px; white-space: nowrap; }
+.menu .items button:hover { background: var(--bg); }
 
 .app { display: flex; flex-direction: column; height: 100vh; }
 
@@ -91,7 +98,8 @@ table.grid th {
   padding: 4px 3px; border-bottom: 1px solid var(--line); position: sticky; top: 0; background: var(--panel);
 }
 col.dim { width: 60px; } col.qty { width: 46px; } col.sel { width: 72px; } col.tag { width: 92px; } col.x { width: 22px; }
-col.grain { width: 58px; } col.edges { width: 50px; }
+col.grain { width: 58px; } col.edges { width: 50px; } col.rough { width: 46px; }
+td.center { text-align: center; }
 svg.edges { width: 40px; height: 24px; display: block; margin: auto; }
 svg.edges rect { fill: #ead7b0; opacity: 0.6; }
 svg.edges line { stroke: var(--line); stroke-width: 4; stroke-linecap: round; cursor: pointer; }
@@ -113,6 +121,10 @@ code { font-size: 12px; background: var(--bg); padding: 1px 4px; border-radius: 
 .settings { display: grid; gap: 14px; max-width: 360px; align-content: start; }
 .settings label { display: grid; gap: 4px; font-weight: 600; font-size: 13px; }
 .settings label.check { display: flex; gap: 8px; align-items: center; font-weight: 400; }
+.settings h4 { margin: 10px 0 -4px; font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+.settings .pair { display: flex; gap: 6px; align-items: center; font-weight: 400; }
+.settings .note { font-weight: 400; color: var(--muted); }
+.settings .pair input { width: 0; flex: 1; }
 .settings input:not([type]), .settings select {
   border: 1px solid var(--line); background: var(--input); border-radius: 6px; padding: 5px 8px; font-weight: 400;
 }

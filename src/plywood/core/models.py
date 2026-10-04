@@ -69,6 +69,8 @@ class Stock:
     kind: StockKind = StockKind.SHEET
     # Edges to trim, as seen in the diagram: l/r = the ends, b/t = the long sides. None = no edges.
     trim_edges: str | None = None
+    rough: bool = False  # rough-sawn board: every part from it is jointed and planed
+    find: bool = False  # an assumed board to go find (no matching board was listed)
 
     @property
     def on_hand(self) -> bool:
@@ -77,13 +79,24 @@ class Stock:
 
 @dataclass
 class Settings:
-    rip_kerf: float = 0.125 * INCH
-    crosscut_kerf: float = 0.125 * INCH
+    sheet_kerf: float = 0.125 * INCH  # every sheet cut (track or table saw)
+    rip_kerf: float = 0.125 * INCH  # board rips (table saw)
+    crosscut_kerf: float = 0.125 * INCH  # board crosscuts (miter saw)
+    rough_crosscut_kerf: float = 0.125 * INCH  # cutting a rough board into segments (jig saw)
     edge_trim: float = 0.0  # removed from each trimmed edge (stock rows choose which edges)
     allowance: float = 0.0  # rough-cut oversize, total per dimension (parts cut this much bigger)
     thickness_tolerance: float = 0.5  # mm
     default_sheets: bool = True  # add unlimited 4x8 sheets for thicknesses with no stock
     min_offcut: float = 4 * INCH  # offcuts smaller than this in either dimension are scrap
+    # Lumber
+    max_planing: float = 0.25 * INCH  # a board can be at most this much thicker than its parts
+    rough_cleanup: float = 0.125 * INCH  # the least a rough board loses to face jointing and planing
+    edge_joint: float = INCH / 16  # taken off one edge of a rough segment by the jointer
+    min_planer_length: float = 18 * INCH
+    snipe: float = 4 * INCH  # extra length at each end of a planed segment, cut off after planing
+    board_width: float = 6 * INCH  # typical size assumed for boards to find
+    board_length: float = 96 * INCH
+    default_boards: bool = True  # assume boards to find for board parts with no matching stock
     tries: int = 1000  # random layouts tried after the fixed sweep
     priority: str = "waste"  # after fewest sheets: "waste", "balanced", or "cuts"
     seed: int = 0  # same inputs + same seed = same layout
@@ -129,12 +142,14 @@ class Segment:
 @dataclass(frozen=True)
 class CutStep:
     number: int
-    direction: str  # "rip", "crosscut", or "trim" (all edges of the sheet)
+    direction: str  # "rip", "crosscut", "trim" (all edges of the sheet), or "plane"
     piece: Rect  # the piece being cut
     positions: tuple[float, ...]  # absolute coordinates where each kerf starts
     kerf: float
     segments: tuple[Segment, ...]
     piece_label: str = ""  # "" for the whole stock piece, else the letter given when it was cut off
+    thickness: float = 0.0  # "plane": the target thickness
+    jointed: bool = False  # "plane": a face and an edge are jointed first
 
 
 @dataclass

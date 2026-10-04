@@ -28,12 +28,16 @@ This writes `out/report.html` (printable diagrams and cut steps), `out/cutlist.c
 - `grain` is blank (free to rotate), `length`, or `width`.
 - `tag` is optional free text. A tagged part only uses stock with the same tag.
 
-**Stock CSV** has the columns `name,length,width,thickness,qty,tag,kind`.
+**Stock CSV** has the columns `name,length,width,thickness,qty,tag,kind,rough`.
 - `length` runs along the grain.
 - `qty` blank means buy as needed. A number means that many pieces are on hand, and on-hand pieces are used first.
 - `kind` is `sheet` or `board`.
-- A part matches stock by thickness, within 0.5 mm.
+- `rough` (`yes` or blank) marks a rough-sawn board. Every part from it gets jointed and planed.
+- A sheet part matches a sheet of its thickness, within 0.5 mm.
+- A board part can come from a board up to 1/4" thicker, which gets planed down. A rough board has to be at least 1/8" thicker.
+- Planed segments get 4" of snipe allowance at each end and are at least 18" long.
 - Thicknesses with no matching stock get unlimited 4×8 sheets, unless you pass `--no-default-sheets`.
+- Board parts with no matching board get rough "boards to find" in the next standard thickness (4/4, 5/4, 6/4, 8/4…). The report lists them with board feet.
 
 **Parts CSV** also has a `kind` column: `sheet` (the default) or `board`. A part is only ever cut from stock of the same kind.
 

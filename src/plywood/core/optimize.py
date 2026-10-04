@@ -27,8 +27,9 @@ from plywood.core.guillotine import (
     replay,
     to_layout,
 )
-from plywood.core.matching import fits_stock, stock_matches, with_default_sheets
-from plywood.core.models import Part, Result, Settings, Stock, Unplaced
+from plywood.core.lumber import SPANS, pack_boards
+from plywood.core.matching import fits_stock, stock_matches, with_default_stock
+from plywood.core.models import Part, Result, Settings, Stock, StockKind, Unplaced
 
 SORTS = {
     "area": lambda p: (-(p.length * p.width), -max(p.length, p.width)),
@@ -36,6 +37,13 @@ SORTS = {
     "short": lambda p: (-min(p.length, p.width), -max(p.length, p.width)),
     "perimeter": lambda p: (-(p.length + p.width), -max(p.length, p.width)),
 }
+BOARD_SORTS = {
+    "long": lambda p: (-p.length, -p.width),
+    "area": lambda p: (-(p.length * p.width), -p.length),
+    "wide": lambda p: (-p.width, -p.length),
+    "thickness": lambda p: (-p.thickness, -p.length, -p.width),  # one thickness at a time
+}
+BOARD_SPLIT_RULES = ("sas", "las", "h", "v")
 
 ANOTHER_TRIES = 300  # random layouts tried when looking for another layout of one sheet
 SAME_LOOK = 0.05  # layouts whose big leftovers differ by less than this much of the sheet count as one
@@ -52,7 +60,7 @@ class Job:
 
 
 def prepare(parts: list[Part], stocks: list[Stock], settings: Settings) -> Job:
-    stocks = with_default_sheets(parts, stocks, settings)
+    stocks = with_default_stock(parts, stocks, settings)
     unplaced: list[Unplaced] = []
     instances: list[Instance] = []
     for part in parts:
@@ -90,7 +98,13 @@ def _stock_orders(stocks: list[Stock]) -> list[list[int]]:
 def _candidates(
     instances: list[Instance], stocks: list[Stock], stock_orders: list[list[int]], settings: Settings, tries: int
 ) -> Iterator[Packing]:
-    """Strip layouts, then every heuristic combination, then `tries` random variations."""
+    """Strip layouts, then every heuristic combination, then `tries` random variations.
+
+    `instances` are all sheet parts or all board parts.
+    """
+    if instances and instances[0].part.kind == StockKind.BOARD:
+        yield from _board_candidates(instances, stocks, stock_orders, settings, tries)
+        return
 
     def strip_key(it: Instance):
         p = it.part
@@ -136,18 +150,53 @@ def _candidates(
         )
 
 
+def _board_candidates(
+    instances: list[Instance], stocks: list[Stock], stock_orders: list[list[int]], settings: Settings, tries: int
+) -> Iterator[Packing]:
+    for sort_name, rect_rule, split_rule, bin_rule, span, stock_order in itertools.product(
+        BOARD_SORTS, RECT_RULES, BOARD_SPLIT_RULES, BIN_RULES, SPANS, stock_orders
+    ):
+        order = sorted(instances, key=lambda it: BOARD_SORTS[sort_name](it.part))
+        yield pack_boards(order, stocks, stock_order, settings, rect_rule, split_rule, bin_rule, span)
+
+    rng = random.Random(settings.seed)
+    unique = list(dict.fromkeys(it.part for it in instances))
+    for _ in range(tries):
+        sort_key = BOARD_SORTS[rng.choice(list(BOARD_SORTS))]
+        noise = {p: rng.uniform(0.75, 1.25) for p in unique}
+        order = sorted(instances, key=lambda it: tuple(v * noise[it.part] for v in sort_key(it.part)))
+        stock_order = list(rng.choice(stock_orders))
+        n_on_hand = sum(1 for i in stock_order if stocks[i].on_hand)
+        head = stock_order[:n_on_hand]
+        rng.shuffle(head)
+        stock_order[:n_on_hand] = head
+        yield pack_boards(
+            order, stocks, stock_order, settings,
+            rng.choice(RECT_RULES), rng.choice(BOARD_SPLIT_RULES), rng.choice(BIN_RULES),
+            lambda: rng.choice(SPANS),  # each segment sized its own way
+        )
+
+
 def optimize(parts: list[Part], stocks: list[Stock], settings: Settings | None = None) -> Result:
     settings = settings or Settings()
     job = prepare(parts, stocks, settings)
-    best: Packing | None = None
-    best_score = None
+    stock_orders = _stock_orders(job.stocks)
+    bins: list[Bin] = []
     iterations = 0
-    for packing in _candidates(job.instances, job.stocks, _stock_orders(job.stocks), settings, settings.tries):
-        iterations += 1
-        score = packing.score(settings.priority)
-        if best_score is None or score < best_score:
-            best, best_score = packing, score
-    bins = best.bins if best is not None else []
+    # Sheets and boards never share stock, so each is searched on its own.
+    for kind in (StockKind.SHEET, StockKind.BOARD):
+        group = [it for it in job.instances if it.part.kind == kind]
+        if not group:
+            continue
+        best: Packing | None = None
+        best_score = None
+        for packing in _candidates(group, job.stocks, stock_orders, settings, settings.tries):
+            iterations += 1
+            score = packing.score(settings.priority)
+            if best_score is None or score < best_score:
+                best, best_score = packing, score
+        if best is not None:
+            bins += best.bins
     # On-hand first, then purchased; biggest stock first within each.
     bins = sorted(bins, key=lambda b: (not b.stock.on_hand, -b.stock.length * b.stock.width, b.index))
     return finish(job, bins, iterations)
@@ -200,6 +249,10 @@ def _canon(tree) -> str:
     def walk(t):
         if t is None:
             return None
+        if isinstance(t, dict) and "seg" in t:
+            seg = t["seg"]
+            clean = {"plane": float(seg.get("plane", 0)), "jointed": bool(seg.get("jointed")), "inset": float(seg.get("inset", 0))}
+            return {"seg": {k: v for k, v in clean.items() if v}, "t": walk(t["t"])}
         if isinstance(t, dict):
             return {"i": int(t["i"]), "r": bool(t["r"])}
         return [t[0], float(t[1]), *(walk(c) for c in t[2:])]

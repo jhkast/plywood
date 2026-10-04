@@ -17,7 +17,7 @@ const FIELDS = {
 function newRow(table) {
   const row = { name: '', length: '', width: '', thickness: '', qty: '', kind: 'sheet', tag: '' };
   if (table === 'parts') row.grain = '';
-  else row.trim_edges = null;
+  else Object.assign(row, { trim_edges: null, rough: false });
   return row;
 }
 
@@ -67,6 +67,27 @@ function normalize(field, value) {
   return value.trim();
 }
 
+// Columns the CSV importers read (io/parts_csv.py), in table order.
+const EXPORT_COLUMNS = {
+  parts: ['name', 'length', 'width', 'thickness', 'qty', 'grain', 'kind', 'tag'],
+  stock: ['name', 'length', 'width', 'thickness', 'qty', 'trim', 'kind', 'rough', 'tag'],
+};
+
+function csvCell(v) {
+  v = String(v);
+  return /[",\r\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v;
+}
+
+// Older files had one kerf for every saw.
+function migrateSettings(settings) {
+  const s = { ...(settings || {}) };
+  if (s.kerf && !s.sheet_kerf) {
+    for (const k of ['sheet_kerf', 'rip_kerf', 'crosscut_kerf', 'rough_crosscut_kerf']) s[k] = s.kerf;
+  }
+  delete s.kerf;
+  return s;
+}
+
 function plywood() {
   return {
     state: { job: '', units: 'in', denominator: 16, settings: {}, parts: [], stock: [] },
@@ -78,6 +99,8 @@ function plywood() {
     switching: 0, // sheet number waiting on a layout switch
     flash: { text: '', kind: '' },
     seq: 0,
+    keepNext: false,
+    menu: null, // open top-row menu: 'import' | 'export'
     timers: {},
 
     async init() {
@@ -101,6 +124,7 @@ function plywood() {
         if (first) { first = false; return; }
         this.schedule();
       });
+      this.keepNext = true;
       this.run();
     },
 
@@ -241,7 +265,7 @@ function plywood() {
     },
     describe(e) {
       const where = e.table === 'settings' ? 'Settings' : `${e.table === 'parts' ? 'Part' : 'Stock'} row ${e.index + 1}`;
-      if (e.table === 'settings') return `${where}, ${e.field.replace('_', ' ')}: ${e.message}`;
+      if (e.table === 'settings') return `${where}, ${e.field.replaceAll('_', ' ')}: ${e.message}`;
       return `${where}, ${e.field}: ${e.message}`;
     },
 
@@ -276,10 +300,14 @@ function plywood() {
         this.save();
       }
     },
+    // `keepNext`: the next run shows the saved cut list as it is (after opening a file or
+    // the app) instead of recalculating it.
     async run() {
+      const keep = this.keepNext;
+      this.keepNext = false;
       const my = ++this.seq;
       this.busy = true;
-      const r = await this.call('optimize');
+      const r = await this.call('optimize', keep);
       if (my !== this.seq) return; // a newer edit superseded this run
       this.busy = false;
       this.show(r);
@@ -343,9 +371,10 @@ function plywood() {
       this.state = await api('convert_units', JSON.parse(JSON.stringify(this.state)), to);
     },
     newJob() {
-      if (this.countRows('parts') && !confirm('Start a new job? Parts will be cleared; your stock list stays.')) return;
+      if ((this.countRows('parts') || this.countRows('stock')) && !confirm('Start a new job? Parts and stock will be cleared.')) return;
       this.state.job = 'Untitled';
       this.state.parts = [newRow('parts')];
+      this.state.stock = [newRow('stock')];
     },
     async saveJob() {
       const job = {
@@ -355,6 +384,7 @@ function plywood() {
         denominator: this.state.denominator,
         settings: this.state.settings,
         parts: this.state.parts.filter((r) => !isBlank(r)),
+        stock: this.state.stock.filter((r) => !isBlank(r)),
         result: this.plan,
       };
       await this.saveText(this.fileBase() + '.json', JSON.stringify(job, null, 1), 'application/json');
@@ -370,24 +400,72 @@ function plywood() {
       } catch (err) {
         return this.say(`${file.name} isn't a Plywood job: ${err.message}`, 'error');
       }
-      // Bring the stock list into the job's units so every bare number means the same thing.
+      // Older job files have no stock: keep the current stock, in the job's units so every
+      // bare number means the same thing.
       if (job.units && job.units !== this.state.units) {
         this.state = await api('convert_units', JSON.parse(JSON.stringify(this.state)), job.units);
       }
       this.state.job = job.job || file.name.replace(/\.json$/i, '');
       if (job.denominator) this.state.denominator = job.denominator;
-      this.state.settings = { ...this.state.settings, ...(job.settings || {}) };
+      this.state.settings = { ...this.state.settings, ...migrateSettings(job.settings) };
       this.state.parts = job.parts.map((r) => ({ ...newRow('parts'), ...r }));
-      this.plan = job.result || null; // shown as saved unless the stock list has changed since
+      if (Array.isArray(job.stock)) this.state.stock = job.stock.map((r) => ({ ...newRow('stock'), ...r }));
+      this.plan = job.result || null;
+      this.keepNext = true; // shown exactly as saved
       this.ensureBlank('parts');
+      this.ensureBlank('stock');
       this.say('Opened ' + file.name);
     },
+    // ---------------------------------------------------------------- export / import one tab
+
+    exportTable(table) {
+      const rows = this.state[table].filter((r) => !isBlank(r));
+      if (!rows.length) return this.say(`No ${table} to export.`, 'error');
+      const cols = EXPORT_COLUMNS[table];
+      const value = (row, c) => {
+        if (c === 'rough') return row.rough && row.kind === 'board' ? 'yes' : '';
+        if (c === 'trim') return row.trim_edges == null ? '' : row.trim_edges || 'none';
+        return row[c] ?? '';
+      };
+      const lines = [cols.join(','), ...rows.map((r) => cols.map((c) => csvCell(value(r, c))).join(','))];
+      this.saveText(`${this.fileBase()} ${table}.csv`, lines.join('\r\n') + '\r\n', 'text/csv');
+    },
+    exportSettings() {
+      const file = { plywood_settings: 1, units: this.state.units, denominator: this.state.denominator, settings: this.state.settings };
+      this.saveText('plywood settings.json', JSON.stringify(file, null, 1), 'application/json');
+    },
+    async importSettings(e) {
+      const file = e.target.files[0];
+      e.target.value = '';
+      if (!file) return;
+      let data;
+      try {
+        data = JSON.parse(await file.text());
+        if (!data.settings || typeof data.settings !== 'object') throw new Error('no settings');
+      } catch (err) {
+        return this.say(`${file.name} has no Plywood settings: ${err.message}`, 'error');
+      }
+      let settings = migrateSettings(data.settings);
+      if (data.units && data.units !== this.state.units) { // lengths are in the file's units
+        const conv = await api('convert_units', { units: data.units, denominator: this.state.denominator, settings, parts: [], stock: [] }, this.state.units);
+        settings = conv.settings;
+      }
+      this.state.settings = { ...this.state.settings, ...settings };
+      if (data.denominator) this.state.denominator = data.denominator;
+      this.say('Loaded settings from ' + file.name);
+    },
+    reoptimize() {
+      this.plan = null;
+      this.run();
+    },
     async exportCsv() {
+      if (this.result?.stale) return this.say(this.result.message, 'error');
       const r = await this.call('report');
       if (!r.ok) return this.say(r.message, 'error');
       await this.saveText(this.fileBase() + ' cut list.csv', r.csv, 'text/csv');
     },
     async printReport() {
+      if (this.result?.stale) return this.say(this.result.message, 'error');
       const r = await this.call('open_report');
       if (!r.ok) return this.say(r.message, 'error');
       this.say('Report opened in your browser; print it from there (Ctrl+P).');

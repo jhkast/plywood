@@ -71,16 +71,18 @@ def piece_colors(layout: Layout) -> dict[str, str]:
     return colors
 
 
-def _badge_spot(x: float, y: float, w: float, h: float, taken: list[tuple[float, float]]) -> tuple[float, float]:
-    """Top-left of a letter badge inside a piece, clear of every badge already placed.
+def _badge_spot(
+    x: float, y: float, w: float, h: float, taken: list[tuple[float, float, float]], bw: float = BADGE_W
+) -> tuple[float, float]:
+    """Top-left of a `bw`-wide badge inside a piece, clear of every badge already placed.
 
     Tries each corner first, then steps inward from the corners (sideways and up/down).
     """
     pad = 2
-    step_x, step_y = BADGE_W + pad, BADGE_H + pad
+    step_x, step_y = bw + pad, BADGE_H + pad
     cols = max(1, int((w - pad) // step_x))
     rows = max(1, int((h - pad) // step_y))
-    left, right = x + pad, x + w - BADGE_W - pad
+    left, right = x + pad, x + w - bw - pad
     top, bottom = y + pad, y + h - BADGE_H - pad
     candidates = []
     for ring in range(max(cols, rows)):
@@ -95,17 +97,17 @@ def _badge_spot(x: float, y: float, w: float, h: float, taken: list[tuple[float,
                 (left + k * step_x, bottom - j * step_y),
             ]
     # Too thin to hold a free spot inside: the nearest free spot around its middle.
-    cx, cy = x + w / 2 - BADGE_W / 2, y + h / 2 - BADGE_H / 2
+    cx, cy = x + w / 2 - bw / 2, y + h / 2 - BADGE_H / 2
     for r in range(1, 8):
         for dx in range(-r, r + 1):
             for dy in range(-r, r + 1):
                 if max(abs(dx), abs(dy)) == r:
                     candidates.append((cx + dx * step_x, cy + dy * step_y))
     for bx, by in candidates:
-        if all(abs(bx - tx) >= BADGE_W or abs(by - ty) >= BADGE_H for tx, ty in taken):
-            taken.append((bx, by))
+        if all(bx >= tx + tw or tx >= bx + bw or abs(by - ty) >= BADGE_H for tx, ty, tw in taken):
+            taken.append((bx, by, bw))
             return bx, by
-    taken.append((right, top))
+    taken.append((right, top, bw))
     return right, top
 
 
@@ -149,11 +151,19 @@ def layout_svg(
         out.append(_text_block([p.label, fmt.dims(p.part.length, p.part.width)], p.rect, px))
     outlines, letters = [], []  # letters are drawn after every outline so none gets covered
     colors = piece_colors(layout)
-    taken: list[tuple[float, float]] = []  # badge top-left corners already used
+    planed = {st.piece_label: st.thickness for st in layout.steps if st.direction == "plane"}
+    drawn: set[str] = set()
+    taken: list[tuple[float, float, float]] = []  # badges already placed: (x, y, width)
     for step in layout.steps:
         x0, y0, w0, h0 = px(step.piece)
-        if step.piece_label:
-            bx, by = _badge_spot(x0, y0, w0, h0, taken)
+        if step.piece_label and step.piece_label not in drawn:
+            drawn.add(step.piece_label)
+            # A planed segment's badge also shows its thickness: "A 3/4"".
+            text = step.piece_label
+            if step.piece_label in planed:
+                text += " " + fmt.thickness(planed[step.piece_label])
+            bw = BADGE_W if len(text) == 1 else 6 * len(text) + 6
+            bx, by = _badge_spot(x0, y0, w0, h0, taken, bw)
             color = colors.get(step.piece_label, PIECE)
             hidden = "" if pieces else ' opacity="0"'
             outlines.append(
@@ -163,10 +173,12 @@ def layout_svg(
             )
             letters.append(
                 f'<g class="letter" data-piece="{step.piece_label}"{hidden}>'
-                f'<rect x="{bx:.1f}" y="{by:.1f}" width="{BADGE_W}" height="{BADGE_H}" rx="3" fill="{color}"/>'
-                f'<text x="{bx + BADGE_W / 2:.1f}" y="{by + BADGE_H / 2 + 0.5:.1f}" font-size="10" font-weight="700" '
-                f'fill="#fff" text-anchor="middle" dominant-baseline="middle">{step.piece_label}</text></g>'
+                f'<rect x="{bx:.1f}" y="{by:.1f}" width="{bw}" height="{BADGE_H}" rx="3" fill="{color}"/>'
+                f'<text x="{bx + bw / 2:.1f}" y="{by + BADGE_H / 2 + 0.5:.1f}" font-size="10" font-weight="700" '
+                f'fill="#fff" text-anchor="middle" dominant-baseline="middle">{escape(text)}</text></g>'
             )
+        if step.direction == "plane":
+            continue
         if step.direction == "trim":
             left, right, bottom, top = (t * scale for t in layout.trims)
             xl, xr, yt, yb = x0 + left, x0 + w0 - right, y0 + top, y0 + h0 - bottom

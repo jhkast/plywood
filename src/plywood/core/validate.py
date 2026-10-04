@@ -2,9 +2,17 @@
 
 from __future__ import annotations
 
-from plywood.core.models import Grain, Result, StockKind
+from plywood.core.matching import needs_planing, thickness_ok
+from plywood.core.models import Grain, Rect, Result, StockKind
 
 EPS = 1e-6
+
+
+def _inside(r: Rect, outer: Rect) -> bool:
+    return (
+        r.x >= outer.x - EPS and r.y >= outer.y - EPS
+        and r.x + r.w <= outer.x + outer.w + EPS and r.y + r.h <= outer.y + outer.h + EPS
+    )
 
 
 def check(result: Result) -> list[str]:
@@ -15,6 +23,10 @@ def check(result: Result) -> list[str]:
         lo_x, lo_y = left, bottom
         hi_x, hi_y = lay.stock.length - right, lay.stock.width - top
         ps = lay.placements
+        planes = [st for st in lay.steps if st.direction == "plane"]
+        for st in planes:
+            if st.piece.w < s.min_planer_length - EPS:
+                problems.append(f"sheet {lay.number}: segment {st.piece_label} is shorter than the planer minimum")
         for p in ps:
             r = p.rect
             where = f"sheet {lay.number} {p.label}"
@@ -32,8 +44,14 @@ def check(result: Result) -> list[str]:
                 problems.append(f"{where}: rotated across a board")
             if p.part.kind != lay.stock.kind:
                 problems.append(f"{where}: {p.part.kind} part on {lay.stock.kind} stock")
-            if abs(p.part.thickness - lay.stock.thickness) > s.thickness_tolerance:
+            if not thickness_ok(p.part, lay.stock, s):
                 problems.append(f"{where}: thickness mismatch")
+            if needs_planing(p.part, lay.stock, s):
+                seg = next((st.piece for st in planes if _inside(r, st.piece) and abs(st.thickness - p.part.thickness) < 0.01), None)
+                if seg is None:
+                    problems.append(f"{where}: needs planing but isn't in a segment planed to its thickness")
+                elif r.x < seg.x + s.snipe - EPS or r.x + r.w > seg.x + seg.w - s.snipe + EPS:
+                    problems.append(f"{where}: inside the snipe")
         tags = {(p.part.tag or "").strip().lower() for p in ps} - {""}
         if len(tags) > 1:
             problems.append(f"sheet {lay.number}: mixes materials {sorted(tags)}")
@@ -42,7 +60,8 @@ def check(result: Result) -> list[str]:
                 ra, rb = a.rect, b.rect
                 gap_x = max(rb.x - (ra.x + ra.w), ra.x - (rb.x + rb.w))
                 gap_y = max(rb.y - (ra.y + ra.h), ra.y - (rb.y + rb.h))
-                if gap_x < s.crosscut_kerf - EPS and gap_y < s.rip_kerf - EPS:
+                rip, cross = (s.sheet_kerf, s.sheet_kerf) if lay.stock.kind == StockKind.SHEET else (s.rip_kerf, s.crosscut_kerf)
+                if gap_x < min(cross, s.rough_crosscut_kerf if lay.stock.rough else cross) - EPS and gap_y < rip - EPS:
                     problems.append(f"sheet {lay.number}: {a.label} and {b.label} overlap or lack kerf")
     used: dict[int, int] = {}
     for lay in result.layouts:

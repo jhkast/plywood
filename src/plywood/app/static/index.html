@@ -21,9 +21,30 @@
     <button @click="newJob()">New</button>
     <button @click="$refs.openJob.click()">Open…</button>
     <button @click="saveJob()">Save…</button>
-    <button @click="exportCsv()">Export CSV</button>
-    <button class="primary" @click="printReport()">Print report</button>
+    <div class="menus" @click.outside="menu = null" @keydown.escape.window="menu = null">
+    <div class="menu">
+      <button :class="{on: menu === 'import'}" @click="menu = menu === 'import' ? null : 'import'">Import ▾</button>
+      <div class="items" x-show="menu === 'import'" @click="menu = null">
+        <button @click="$refs.importParts.click()">Parts (CSV or Onshape BOM)…</button>
+        <button @click="$refs.importStock.click()">Stock CSV…</button>
+        <button @click="$refs.importSettings.click()">Settings…</button>
+      </div>
+    </div>
+    <div class="menu">
+      <button :class="{on: menu === 'export'}" @click="menu = menu === 'export' ? null : 'export'">Export ▾</button>
+      <div class="items" x-show="menu === 'export'" @click="menu = null">
+        <button @click="printReport()">Print report…</button>
+        <button @click="exportCsv()">Cut list CSV…</button>
+        <button @click="exportTable('parts')">Parts CSV…</button>
+        <button @click="exportTable('stock')">Stock CSV…</button>
+        <button @click="exportSettings()">Settings…</button>
+      </div>
+    </div>
+    </div>
     <input type="file" x-ref="openJob" accept=".json" hidden @change="openJob($event)">
+    <input type="file" x-ref="importParts" accept=".csv,text/csv" hidden @change="importFile($event, 'parts')">
+    <input type="file" x-ref="importStock" accept=".csv,text/csv" hidden @change="importFile($event, 'stock')">
+    <input type="file" x-ref="importSettings" accept=".json" hidden @change="importSettings($event)">
     <datalist id="tag-options">
       <template x-for="t in allTags()" :key="t"><option :value="t"></option></template>
     </datalist>
@@ -43,9 +64,7 @@
       <!-- Parts -->
       <div class="panel" x-show="tab === 'parts'">
         <div class="tools">
-          <button @click="$refs.importParts.click()">Import CSV / Onshape BOM…</button>
           <button class="ghost" @click="clearTable('parts')">Clear</button>
-          <input type="file" x-ref="importParts" accept=".csv,text/csv" hidden @change="importFile($event, 'parts')">
         </div>
         <table class="grid">
           <colgroup><col><col class="dim"><col class="dim"><col class="dim"><col class="qty"><col class="grain"><col class="sel"><col class="tag"><col class="x"></colgroup>
@@ -75,15 +94,14 @@
       <!-- Stock -->
       <div class="panel" x-show="tab === 'stock'">
         <div class="tools">
-          <button @click="$refs.importStock.click()">Import CSV…</button>
           <button class="ghost" @click="clearTable('stock')">Clear</button>
-          <input type="file" x-ref="importStock" accept=".csv,text/csv" hidden @change="importFile($event, 'stock')">
         </div>
         <table class="grid">
-          <colgroup><col><col class="dim"><col class="dim"><col class="dim"><col class="qty"><col class="edges"><col class="sel"><col class="tag"><col class="x"></colgroup>
+          <colgroup><col><col class="dim"><col class="dim"><col class="dim"><col class="qty"><col class="edges"><col class="sel"><col class="rough"><col class="tag"><col class="x"></colgroup>
           <thead><tr>
             <th>Name</th><th>Length</th><th>Width</th><th>Thick</th>
-            <th title="Pieces on hand. Blank = buy as many as needed">On hand</th><th title="Edges to trim">Trim</th><th>Kind</th><th>Tag</th><th></th>
+            <th title="Pieces on hand. Blank = buy as many as needed">On hand</th><th title="Edges to trim">Trim</th><th>Kind</th>
+            <th title="Rough-sawn board: jointed and planed">Rough</th><th>Tag</th><th></th>
           </tr></thead>
           <tbody>
             <template x-for="(row, i) in state.stock" :key="i">
@@ -104,6 +122,7 @@
                   </svg>
                 </td>
                 <td><select x-model="row.kind"><option value="sheet">sheet</option><option value="board">board</option></select></td>
+                <td class="center"><input type="checkbox" x-show="row.kind === 'board'" x-model="row.rough"></td>
                 <td><input x-model="row.tag" list="tag-options" placeholder="any" spellcheck="false" @input="ensureBlank('stock')" @paste="paste($event, 'stock', i, 'tag')"></td>
                 <td><button class="del" x-show="!isBlank(row)" @click="removeRow('stock', i)" title="Remove row">×</button></td>
               </tr>
@@ -155,13 +174,33 @@
 
       <!-- Settings -->
       <div class="panel settings" x-show="tab === 'settings'">
-        <label>Kerf <input x-model="state.settings.kerf" :class="cellClass('settings', 0, 'kerf')"></label>
-        <label>Edge trim <input x-model="state.settings.edge_trim" :class="cellClass('settings', 0, 'edge_trim')"></label>
-        <label>Rough-cut oversize <input x-model="state.settings.allowance" :class="cellClass('settings', 0, 'allowance')"></label>
+        <h4>Kerf</h4>
+        <template x-for="[f, label, note] in [['sheet_kerf', 'Sheets', 'track or table saw'], ['rip_kerf', 'Board rips', 'table saw'],
+                                              ['crosscut_kerf', 'Board crosscuts', 'miter saw'], ['rough_crosscut_kerf', 'Rough boards into segments', 'jig saw']]" :key="f">
+          <label><span><span x-text="label"></span> <span class="note" x-text="note"></span></span>
+            <input x-model="state.settings[f]" :class="cellClass('settings', 0, f)"></label>
+        </template>
+        <h4>Allowances</h4>
+        <label><span>Edge trim <span class="note">each trimmed edge</span></span>
+          <input x-model="state.settings.edge_trim" :class="cellClass('settings', 0, 'edge_trim')"></label>
+        <label><span>Rough-cut oversize <span class="note">total, on length and on width</span></span>
+          <input x-model="state.settings.allowance" :class="cellClass('settings', 0, 'allowance')"></label>
+        <h4>Lumber</h4>
+        <template x-for="[f, label, note] in [['max_planing', 'Max planing', 'total off the thickness'], ['rough_cleanup', 'Rough cleanup', 'total off the thickness'],
+                                              ['edge_joint', 'Edge jointing', 'one edge'], ['min_planer_length', 'Min planer length', ''], ['snipe', 'Snipe', 'each end']]" :key="f">
+          <label><span><span x-text="label"></span> <span class="note" x-text="note"></span></span>
+            <input x-model="state.settings[f]" :class="cellClass('settings', 0, f)"></label>
+        </template>
+        <label class="check"><input type="checkbox" x-model="state.settings.default_boards"> Assume boards to find when no stock matches</label>
+        <label>Typical board to find
+          <span class="pair"><input x-model="state.settings.board_width" :class="cellClass('settings', 0, 'board_width')" title="Width">
+          × <input x-model="state.settings.board_length" :class="cellClass('settings', 0, 'board_length')" title="Length"></span>
+        </label>
+        <h4>General</h4>
+        <label class="check"><input type="checkbox" x-model="state.settings.default_sheets"> Assume 4×8 sheets when no stock matches</label>
         <label>Fraction precision
           <select x-model.number="state.denominator"><option value="8">1/8"</option><option value="16">1/16"</option><option value="32">1/32"</option></select>
         </label>
-        <label class="check"><input type="checkbox" x-model="state.settings.default_sheets"> Assume 4×8 sheets when no stock matches</label>
         <label>Layouts to try <span x-text="state.settings.tries"></span>
           <input type="range" min="0" max="5000" step="100" x-model.number="state.settings.tries">
         </label>
@@ -178,12 +217,14 @@
             <button :class="{on: state.settings.priority === 'cuts'}" @click="state.settings.priority = 'cuts'"
                     title="Fewest saw steps and cuts: rip into strips, then crosscut">Simplest cutting</button>
           </div>
+          <button class="ghost reopt" x-show="!busy && result && (result.ok || result.stale)" @click="reoptimize()">Re-optimize</button>
         </div>
         <template x-if="busy"><span class="spin">Optimizing…</span></template>
         <template x-if="!busy && result && result.ok && result.stats">
           <div class="stats">
             <span><b x-text="result.stats.stock"></b> stock pieces</span>
             <span><b x-text="result.stats.buy"></b> to buy</span>
+            <span x-show="result.stats.find"><b x-text="result.stats.find"></b> to find</span>
             <span><b x-text="result.stats.cuts"></b> cuts</span>
             <span><b x-text="result.stats.waste.toFixed(1) + '%'"></b> waste</span>
             <span class="warn" x-show="result.stats.unplaced"><b x-text="result.stats.unplaced"></b> not placed</span>
@@ -204,6 +245,7 @@
         <div class="problems">
           <b x-text="result.message || ('Fix ' + result.errors.length + ' highlighted cell' + (result.errors.length > 1 ? 's' : ''))"></b>
           <ul><template x-for="e in (result.errors || []).slice(0, 8)"><li x-text="describe(e)"></li></template></ul>
+          <button x-show="result.stale" @click="reoptimize()">Re-optimize</button>
         </div>
       </template>
 
