@@ -28,7 +28,7 @@ This writes `out/report.html` (printable diagrams and cut steps), `out/cutlist.c
 - `grain` is blank (free to rotate), `length`, or `width`.
 - `tag` is optional free text. A tagged part only uses stock with the same tag.
 
-**Stock CSV** has the columns `name,length,width,thickness,qty,cost,tag,kind`.
+**Stock CSV** has the columns `name,length,width,thickness,qty,tag,kind`.
 - `length` runs along the grain.
 - `qty` blank means buy as needed. A number means that many pieces are on hand, and on-hand pieces are used first.
 - `kind` is `sheet` or `board`.

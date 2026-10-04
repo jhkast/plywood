@@ -31,11 +31,12 @@
 
   <div class="flash" x-show="flash.text" x-transition.opacity :class="flash.kind" x-text="flash.text" @click="flash.text = ''"></div>
 
-  <main :style="`grid-template-columns: ${leftWidth}px 6px 1fr`">
-    <section class="left">
+  <main>
+    <section class="workspace">
       <nav class="tabs">
         <button :class="{on: tab === 'parts'}" @click="tab = 'parts'">Parts <span class="count" x-text="countRows('parts')"></span></button>
         <button :class="{on: tab === 'stock'}" @click="tab = 'stock'">Stock <span class="count" x-text="countRows('stock')"></span></button>
+        <button :class="{on: tab === 'output'}" @click="tab = 'output'">Cut list <span class="count" x-text="result?.stats?.stock || ''"></span></button>
         <button :class="{on: tab === 'settings'}" @click="tab = 'settings'">Settings</button>
       </nav>
 
@@ -79,15 +80,15 @@
           <input type="file" x-ref="importStock" accept=".csv,text/csv" hidden @change="importFile($event, 'stock')">
         </div>
         <table class="grid">
-          <colgroup><col><col class="dim"><col class="dim"><col class="dim"><col class="qty"><col class="qty"><col class="edges"><col class="sel"><col class="tag"><col class="x"></colgroup>
+          <colgroup><col><col class="dim"><col class="dim"><col class="dim"><col class="qty"><col class="edges"><col class="sel"><col class="tag"><col class="x"></colgroup>
           <thead><tr>
             <th>Name</th><th>Length</th><th>Width</th><th>Thick</th>
-            <th title="Pieces on hand. Blank = buy as many as needed">On hand</th><th>Cost</th><th title="Edges to trim">Trim</th><th>Kind</th><th>Tag</th><th></th>
+            <th title="Pieces on hand. Blank = buy as many as needed">On hand</th><th title="Edges to trim">Trim</th><th>Kind</th><th>Tag</th><th></th>
           </tr></thead>
           <tbody>
             <template x-for="(row, i) in state.stock" :key="i">
               <tr>
-                <template x-for="f in ['name', 'length', 'width', 'thickness', 'qty', 'cost']" :key="f">
+                <template x-for="f in ['name', 'length', 'width', 'thickness', 'qty']" :key="f">
                   <td><input x-model="row[f]" :class="cellClass('stock', i, f)" :title="cellError('stock', i, f) || row[f]"
                              :placeholder="stockPlaceholder(row, f)" spellcheck="false"
                              @input="ensureBlank('stock')" @paste="paste($event, 'stock', i, f)"
@@ -165,19 +166,15 @@
           <input type="range" min="0.3" max="10" step="0.1" x-model.number="state.settings.time_budget">
         </label>
       </div>
-    </section>
-
-    <div class="splitter" @pointerdown="startResize($event)" title="Drag to resize"></div>
-
-    <section class="right">
+      <div class="panel output" x-show="tab === 'output'">
       <div class="status">
         <div class="priority">
           <span class="muted">Prefer</span>
           <div class="seg" role="group" aria-label="Optimization priority">
             <button :class="{on: state.settings.priority === 'waste'}" @click="state.settings.priority = 'waste'"
-                    title="Pack leftovers into the biggest reusable offcut, even if that takes more cuts">Big offcuts</button>
+                    title="Keep the leftover in as few, large pieces as possible">Big leftovers</button>
             <button :class="{on: state.settings.priority === 'balanced'}" @click="state.settings.priority = 'balanced'"
-                    title="Fewer cuts unless it costs a lot of reusable offcut">Balanced</button>
+                    title="Fewer cuts unless it breaks up the leftover a lot">Balanced</button>
             <button :class="{on: state.settings.priority === 'cuts'}" @click="state.settings.priority = 'cuts'"
                     title="Fewest saw steps and cuts: rip into strips, then crosscut">Simplest cutting</button>
           </div>
@@ -187,7 +184,6 @@
           <div class="stats">
             <span><b x-text="result.stats.stock"></b> stock pieces</span>
             <span><b x-text="result.stats.buy"></b> to buy</span>
-            <span x-show="result.stats.cost"><b x-text="'$' + result.stats.cost.toFixed(2)"></b></span>
             <span><b x-text="result.stats.cuts"></b> cuts</span>
             <span><b x-text="result.stats.waste.toFixed(1) + '%'"></b> waste</span>
             <span class="warn" x-show="result.stats.unplaced"><b x-text="result.stats.unplaced"></b> not placed</span>
@@ -222,18 +218,18 @@
           <div class="summary" x-html="result.summary"></div>
           <template x-for="s in result.sheets" :key="s.number">
             <article class="sheet">
-              <h3 x-text="s.title"></h3>
-              <p class="muted" x-text="s.note"></p>
-              <div class="svgwrap" x-html="s.svg"></div>
-              <details :open="openSteps[s.number]" @toggle="openSteps[s.number] = $event.target.open"
-                       @mouseover="highlight($event, true)" @mouseout="highlight($event, false)">
-                <summary>Cut steps</summary>
-                <div x-html="s.steps"></div>
-              </details>
+              <div class="sheethead">
+                <h3 x-text="s.title"></h3>
+                <p class="muted" x-text="s.note"></p>
+                <div class="svgwrap" x-html="s.svg"></div>
+              </div>
+              <div class="sheetsteps" x-html="s.steps"
+                   @mouseover="highlight($event, true)" @mouseout="highlight($event, false)"></div>
             </article>
           </template>
         </div>
       </template>
+      </div>
     </section>
   </main>
 </div>

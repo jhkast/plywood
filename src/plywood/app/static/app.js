@@ -11,13 +11,13 @@ async function api(method, ...args) {
 
 const FIELDS = {
   parts: ['name', 'length', 'width', 'thickness', 'qty', 'grain', 'kind', 'tag'],
-  stock: ['name', 'length', 'width', 'thickness', 'qty', 'cost', 'kind', 'tag'],
+  stock: ['name', 'length', 'width', 'thickness', 'qty', 'kind', 'tag'],
 };
 
 function newRow(table) {
   const row = { name: '', length: '', width: '', thickness: '', qty: '', kind: 'sheet', tag: '' };
   if (table === 'parts') row.grain = '';
-  else Object.assign(row, { cost: '', trim_edges: null });
+  else row.trim_edges = null;
   return row;
 }
 
@@ -77,14 +77,14 @@ function plywood() {
     flash: { text: '', kind: '' },
     seq: 0,
     timers: {},
-    openSteps: {},
-    leftWidth: Math.min(820, Math.max(660, Math.round(window.innerWidth * 0.5))),
 
     async init() {
       try {
-        const saved = Number(localStorage.getItem('plywood.leftWidth'));
-        if (saved) this.leftWidth = saved;
+        this.tab = localStorage.getItem('plywood.tab') || 'parts';
       } catch {}
+      this.$watch('tab', (t) => {
+        try { localStorage.setItem('plywood.tab', t); } catch {}
+      });
       this.state = await api('load_state');
       this.state.settings.priority ||= 'waste';
       this.state.tag_aliases ||= {};
@@ -100,20 +100,6 @@ function plywood() {
       this.run();
     },
 
-    startResize(e) {
-      const startX = e.clientX, start = this.leftWidth;
-      const move = (ev) => {
-        this.leftWidth = Math.min(window.innerWidth - 320, Math.max(420, start + ev.clientX - startX));
-      };
-      const up = () => {
-        window.removeEventListener('pointermove', move);
-        window.removeEventListener('pointerup', up);
-        try { localStorage.setItem('plywood.leftWidth', this.leftWidth); } catch {}
-      };
-      window.addEventListener('pointermove', move);
-      window.addEventListener('pointerup', up);
-    },
-
     // Hovering a cut step outlines its piece and highlights its cuts on that sheet's diagram.
     highlight(e, on) {
       const li = e.target.closest('li[data-step]');
@@ -121,10 +107,7 @@ function plywood() {
       if (!li || !svg) return;
       const step = li.dataset.step, piece = li.dataset.piece;
       svg.querySelectorAll(`line[data-step="${step}"]`).forEach((l) => l.classList.toggle('hot', on));
-      // pieces this step produces
-      li.querySelectorAll('.chip.piece').forEach((c) =>
-        svg.querySelector(`g.piece[data-piece="${c.dataset.piece}"]`)?.setAttribute('opacity', on ? '0.45' : '0'));
-      if (piece) svg.querySelector(`g.piece[data-piece="${piece}"]`)?.setAttribute('opacity', on ? '1' : '0');
+      if (piece) svg.querySelector(`g.piece[data-piece="${piece}"]`)?.classList.toggle('hot', on);
     },
 
     // ---------------------------------------------------------------- tables
@@ -197,7 +180,6 @@ function plywood() {
     },
     stockPlaceholder(row, f) {
       if (f === 'qty') return 'buy';
-      if (f === 'cost') return '$';
       return '';
     },
     // Trimmed edges of a stock row: l/r = ends, b/t = long sides.

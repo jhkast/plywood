@@ -15,8 +15,8 @@ def fast(**kw) -> Settings:
     return Settings(time_budget=30, random_iterations=0, seed=0, **kw)
 
 
-def sheet(qty=None, cost=0.0, length=96, width=48, thickness=PLY, tag=None, name="ply"):
-    return Stock(name, length * IN, width * IN, thickness, qty=qty, cost=cost, tag=tag)
+def sheet(qty=None, length=96, width=48, thickness=PLY, tag=None, name="ply"):
+    return Stock(name, length * IN, width * IN, thickness, qty=qty, tag=tag)
 
 
 def part(name, length, width, qty=1, thickness=PLY, grain=Grain.NONE, tag=None, kind=StockKind.SHEET):
@@ -45,7 +45,7 @@ def test_random_jobs_are_valid(seed):
              grain=rng.choice(list(Grain)))
         for i in range(rng.randint(1, 15))
     ]
-    stocks = [sheet(cost=80), sheet(qty=2, length=40, width=30, name="offcut")]
+    stocks = [sheet(), sheet(qty=2, length=40, width=30, name="offcut")]
     settings = fast(edge_trim=rng.choice([0, 0.25 * IN]))
     settings.time_budget = 0.5  # cap the sweep for big random jobs
     r = optimize(parts, stocks, settings)
@@ -64,10 +64,10 @@ def test_grain_lock_respected():
 
 
 def test_on_hand_used_before_buying():
-    stocks = [sheet(cost=85), sheet(qty=1, length=40, width=30, name="offcut")]
+    stocks = [sheet(), sheet(qty=1, length=40, width=30, name="offcut")]
     r = optimize([part("small", 20, 10, qty=2)], stocks, fast())
     assert [lay.stock.name for lay in r.layouts] == ["offcut"]
-    assert r.purchase_cost == 0
+    assert r.purchased == []
 
 
 def test_on_hand_count_is_a_limit():
@@ -161,9 +161,9 @@ def test_cut_priority_never_buys_more_and_cuts_no_more(seed):
 
 
 def test_trim_only_when_edges_are_chosen():
-    plain = optimize([part("big", 60, 40)], [sheet(cost=80)], fast(edge_trim=0.5 * IN))
+    plain = optimize([part("big", 60, 40)], [sheet()], fast(edge_trim=0.5 * IN))
     assert plain.layouts[0].trims == (0, 0, 0, 0) and plain.layouts[0].steps[0].direction != "trim"
-    trimmed = Stock("ply", 96 * IN, 48 * IN, PLY, cost=80, trim_edges="lrbt")
+    trimmed = Stock("ply", 96 * IN, 48 * IN, PLY, trim_edges="lrbt")
     r = optimize([part("big", 60, 40)], [trimmed], fast(edge_trim=0.5 * IN))
     lay = r.layouts[0]
     assert check(r) == [] and lay.trims == pytest.approx((0.5 * IN,) * 4)
@@ -190,3 +190,12 @@ def test_trim_only_chosen_edges():
     lay = r.layouts[0]
     assert check(r) == [] and lay.trims == pytest.approx((0.25 * IN, 0, 0.25 * IN, 0.25 * IN))
     assert lay.placements[0].rect.x == pytest.approx(0.25 * IN)
+
+
+def test_no_cut_when_leftover_is_narrower_than_kerf():
+    # Four 23.9" parts across a 96" sheet with 1/8" kerf: 3 cuts, then 0.025" left -- no 4th cut.
+    r = optimize([part("p", 23.9, 48, qty=4)], [sheet()], fast(default_sheets=False))
+    lay = r.layouts[0]
+    assert check(r) == [] and len(lay.placements) == 4
+    assert lay.cuts == 3
+    assert all(seg.size > 0 for st in lay.steps for seg in st.segments)

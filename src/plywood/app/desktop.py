@@ -3,12 +3,68 @@
 from __future__ import annotations
 
 import argparse
+import json
 import threading
 import webbrowser
 from pathlib import Path
 
 from plywood.app import server
-from plywood.app.api import Api
+from plywood.app.api import Api, state_path
+
+MIN_SIZE = (900, 600)
+
+
+def _geometry_file() -> Path:
+    return state_path().with_name("window.json")
+
+
+def _load_geometry() -> dict | None:
+    try:
+        g = json.loads(_geometry_file().read_text(encoding="utf-8"))
+        return {k: int(g[k]) for k in ("x", "y", "width", "height")} | {"maximized": bool(g.get("maximized"))}
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
+def _window_geometry(webview) -> dict:
+    """Last saved normal size/position (and maximized flag) if it still overlaps a screen;
+    otherwise 90% of the screen, centered (keeping a saved maximized flag)."""
+    screens = webview.screens
+    g = _load_geometry()
+    # Older saves stored the maximized frame (just off the screen edge) as the normal size.
+    if g is not None and g["maximized"] and any(g["x"] < sc.x or g["y"] < sc.y for sc in screens[:1]):
+        g = {"x": -10**6, "y": -10**6, "width": 0, "height": 0, "maximized": True}
+    if g is not None:
+        overlaps = any(
+            g["x"] < sc.x + sc.width - 100 and g["x"] + g["width"] > sc.x + 100
+            and g["y"] < sc.y + sc.height - 100 and g["y"] + g["height"] > sc.y + 100
+            for sc in screens
+        )
+        if overlaps:
+            return g
+    sc = screens[0]
+    width = max(MIN_SIZE[0], min(1600, int(sc.width * 0.9)))
+    height = max(MIN_SIZE[1], min(1000, int(sc.height * 0.9)))
+    return {
+        "x": sc.x + max(0, (sc.width - width) // 2),
+        "y": sc.y + max(0, (sc.height - height) // 2),
+        "width": width,
+        "height": height,
+        "maximized": bool(g and g["maximized"]),
+    }
+
+
+def _remember_geometry(window, maximized: list[bool], normal: dict) -> None:
+    """Save the normal (un-maximized) size and position, plus whether the window was maximized."""
+    try:
+        g = dict(normal)
+        if not maximized[0]:
+            g.update(x=window.x, y=window.y, width=window.width, height=window.height)
+        g["maximized"] = maximized[0]
+        _geometry_file().parent.mkdir(parents=True, exist_ok=True)
+        _geometry_file().write_text(json.dumps(g), encoding="utf-8")
+    except Exception:  # never block closing the window
+        pass
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -29,8 +85,29 @@ def main(argv: list[str] | None = None) -> None:
         except ImportError:
             print("pywebview isn't installed; opening in the browser instead")
         else:
-            window = webview.create_window("Plywood", url, js_api=api, width=1480, height=920, min_size=(900, 600))
+            g = _window_geometry(webview)
+            window = webview.create_window(
+                "Plywood", url, js_api=api, width=g["width"], height=g["height"], x=g["x"], y=g["y"],
+                maximized=g["maximized"], min_size=MIN_SIZE,
+            )
             api._window = window
+            maximized = [g["maximized"]]
+            normal = {k: g[k] for k in ("x", "y", "width", "height")}
+
+            def on_restored(*_):
+                maximized[0] = False
+
+            def on_resized_or_moved(*_):
+                # Windows reports the maximized frame (just past the screen edge) before the maximized event.
+                looks_maximized = window.x < 0 or window.y < 0
+                if not maximized[0] and not looks_maximized:
+                    normal.update(x=window.x, y=window.y, width=window.width, height=window.height)
+
+            window.events.maximized += lambda *a: maximized.__setitem__(0, True)
+            window.events.restored += on_restored
+            window.events.resized += on_resized_or_moved
+            window.events.moved += on_resized_or_moved
+            window.events.closing += lambda *a: _remember_geometry(window, maximized, normal)
             shown = threading.Event()
             window.events.shown += shown.set
             webview.start()

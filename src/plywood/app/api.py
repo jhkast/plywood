@@ -136,11 +136,6 @@ def parse_state(state: dict) -> tuple[list[Part], list[Stock], Settings, Formatt
         if _blank(row):
             continue
         try:
-            cost_text = str(row.get("cost", "")).strip().lstrip("$")
-            try:
-                cost = float(cost_text) if cost_text else 0.0
-            except ValueError:
-                raise FieldError("stock", i, "cost", "must be a number") from None
             stocks.append(
                 Stock(
                     name=str(row.get("name") or ("Board" if StockKind.parse(row.get("kind")) == StockKind.BOARD else "Sheet")).strip(),
@@ -148,7 +143,6 @@ def parse_state(state: dict) -> tuple[list[Part], list[Stock], Settings, Formatt
                     width=_length(row, "stock", i, "width", unit),
                     thickness=_length(row, "stock", i, "thickness", unit),
                     qty=_int(row, "stock", i, "qty", None),
-                    cost=cost,
                     trim_edges=_trim_edges(row.get("trim_edges")),
                     tag=tag_of(row),
                     kind=StockKind.parse(row.get("kind")),
@@ -198,7 +192,6 @@ def stock_row(s: Stock, fmt: Formatter) -> dict:
         "width": fmt.exact(s.width),
         "thickness": fmt.exact(s.thickness),
         "qty": "" if s.qty is None else str(s.qty),
-        "cost": f"{s.cost:g}" if s.cost else "",
         "trim_edges": s.trim_edges,
         "tag": s.tag or "",
         "kind": str(s.kind),
@@ -253,7 +246,6 @@ class Api:
             "stats": {
                 "stock": len(result.layouts),
                 "buy": len(result.purchased),
-                "cost": result.purchase_cost,
                 "waste": result.waste_pct,
                 "parts": sum(len(lay.placements) for lay in result.layouts),
                 "cuts": sum(lay.cuts for lay in result.layouts),
@@ -264,8 +256,8 @@ class Api:
                     "number": lay.number,
                     "title": sheet_title(lay, fmt),
                     "note": sheet_note(lay, fmt),
-                    "svg": layout_svg(lay, fmt, relative=relative_width(lay, result.layouts)),
-                    "steps": steps_html(lay, fmt),
+                    "svg": layout_svg(lay, fmt, relative=relative_width(lay, result.layouts), pieces=True),
+                    "steps": steps_html(lay, fmt, colored=True),
                 }
                 for lay in result.layouts
             ],

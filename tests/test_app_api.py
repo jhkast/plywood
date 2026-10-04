@@ -5,7 +5,7 @@ def state_with(parts, stock=(), units="in"):
     s = default_state()
     s["units"] = units
     s["parts"] = [dict({"name": "", "length": "", "width": "", "thickness": "", "qty": "", "grain": "", "kind": "sheet", "tag": ""}, **p) for p in parts]
-    s["stock"] = [dict({"name": "", "length": "", "width": "", "thickness": "", "qty": "", "cost": "", "kind": "sheet", "tag": ""}, **r) for r in stock]
+    s["stock"] = [dict({"name": "", "length": "", "width": "", "thickness": "", "qty": "", "kind": "sheet", "tag": ""}, **r) for r in stock]
     s["settings"]["time_budget"] = 0.2
     return s
 
@@ -23,11 +23,11 @@ def test_optimize_returns_sheets(tmp_path):
 def test_bad_cells_are_reported_by_position(tmp_path):
     s = state_with(
         [{"name": "a", "length": "abc", "width": "10", "thickness": "3/4"}, {"name": "b", "length": "10", "width": "", "thickness": "3/4"}],
-        [{"name": "ply", "length": "96", "width": "48", "thickness": "3/4", "cost": "x"}],
+        [{"name": "ply", "length": "abc", "width": "48", "thickness": "3/4"}],
     )
     r = api(tmp_path).optimize(s)
     got = {(e["table"], e["index"], e["field"]) for e in r["errors"]}
-    assert got == {("parts", 0, "length"), ("parts", 1, "width"), ("stock", 0, "cost")}
+    assert got == {("parts", 0, "length"), ("parts", 1, "width"), ("stock", 0, "length")}
 
 
 def test_blank_rows_are_ignored(tmp_path):

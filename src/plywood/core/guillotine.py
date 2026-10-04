@@ -7,7 +7,6 @@ Kerf is removed by every cut. The tree is later flattened into saw steps.
 
 from __future__ import annotations
 
-from collections import deque
 from dataclasses import dataclass, field, replace
 
 from plywood.core.models import CutStep, Layout, Part, Placement, Rect, Segment, Settings, Stock
@@ -33,6 +32,8 @@ class Node:
     pos: float = 0.0
     kerf: float = 0.0
     children: list[Node] = field(default_factory=list)  # [near] or [near, far]
+    pw: float = 0.0  # part size on a part leaf; the leaf can be up to a kerf larger
+    ph: float = 0.0
 
 
 @dataclass(frozen=True, eq=False)
@@ -95,11 +96,15 @@ class Bin:
         return item.tag is None or self.tag is None or item.tag == self.tag
 
     def _cut(self, n: Node, direction: str, size: float) -> tuple[Node, Node | None]:
-        """Cut `n` so the near piece is `size` along the cut axis. No cut if nothing is left over."""
+        """Cut `n` so the near piece is `size` along the cut axis.
+
+        No cut when the leftover is no wider than the kerf: the blade would only make dust,
+        so the near piece keeps that sliver instead.
+        """
         extent = n.h if direction == "H" else n.w
-        if extent - size <= EPS:
-            return n, None
         kerf = self.rip_kerf if direction == "H" else self.crosscut_kerf
+        if extent - size <= kerf + EPS:
+            return n, None
         far_size = extent - size - kerf
         self.cuts += 1
         n.kind, n.direction, n.kerf = "cut", direction, kerf
@@ -125,7 +130,7 @@ class Bin:
         else:
             near, far1 = self._cut(node, "V", pw)
             leaf, far2 = self._cut(near, "H", ph)
-        leaf.kind, leaf.item, leaf.rotated = "part", item, rotated
+        leaf.kind, leaf.item, leaf.rotated, leaf.pw, leaf.ph = "part", item, rotated, pw, ph
         self.free.extend(f for f in (far1, far2) if f is not None)
         self.parts_area += pw * ph
         if item.tag is not None:
@@ -164,7 +169,7 @@ class Packing:
         cuts = sum(b.cuts for b in self.bins)
         steps = sum(b.steps() for b in self.bins)
         # Waste is fixed once the stock is chosen, so it only matters when on-hand pieces differ.
-        head = (len(self.unplaced), round(sum(b.stock.cost for b in purchased), 6), len(purchased), round(waste, 3))
+        head = (len(self.unplaced), len(purchased), round(waste, 3))
         if priority == "cuts":
             return (*head, steps + cuts, -round(largest_free, 4))
         if priority == "balanced":
@@ -312,8 +317,8 @@ def _segment(node: Node | None, along: str, settings: Settings) -> Segment:
         p = node.item
         label = p.part.name if p.part.qty == 1 else f"{p.part.name} #{p.copy}"
         final = None
-        if p.source is not None:
-            src = p.source
+        if p.source is not None or node.w > node.pw + EPS or node.h > node.ph + EPS:
+            src = p.final
             final = (src.width, src.length) if node.rotated else (src.length, src.width)
         return Segment(size, "part", label, final)
     if node.kind == "cut":
@@ -332,15 +337,17 @@ def _letters(n: int) -> str:
 
 
 def cut_steps(root: Node, settings: Settings) -> list[CutStep]:
-    """Flatten the tree into saw steps, breadth first: parallel cuts across one piece become one step.
+    """Flatten the tree into saw steps, depth first: each piece is finished before the next one.
+
+    Parallel cuts across one piece become one step.
 
     Intermediate pieces (ones that need more cutting) get letters A, B, C… so steps can refer to them.
     """
     steps: list[CutStep] = []
     names: dict[int, str] = {}
-    queue = deque([root])
-    while queue:
-        n = queue.popleft()
+    stack = [root]
+    while stack:
+        n = stack.pop()
         if n.kind != "cut":
             continue
         positions: list[float] = []
@@ -374,7 +381,7 @@ def cut_steps(root: Node, settings: Settings) -> list[CutStep]:
                 piece_label=names.get(id(n), ""),
             )
         )
-        queue.extend(p for p in pieces if p is not None)
+        stack.extend(reversed([p for p in pieces if p is not None]))  # first piece next
     return steps
 
 
@@ -391,7 +398,8 @@ def to_layout(b: Bin, number: int, settings: Settings) -> Layout:
     for leaf in _leaves(b.root):
         rect = Rect(leaf.x, leaf.y, leaf.w, leaf.h)
         if leaf.kind == "part":
-            placements.append(Placement(leaf.item.final, leaf.item.copy, rect, leaf.rotated))
+            exact = Rect(leaf.x, leaf.y, leaf.pw, leaf.ph)
+            placements.append(Placement(leaf.item.final, leaf.item.copy, exact, leaf.rotated))
         elif min(leaf.w, leaf.h) >= settings.min_offcut:
             offcuts.append(rect)
         else:

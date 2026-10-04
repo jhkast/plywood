@@ -42,9 +42,71 @@ def _text_block(lines: list[str], r: Rect, px, max_font: float = 14) -> str:
 
 
 def relative_width(layout: Layout, layouts: list[Layout]) -> float:
-    """Fraction of the full width that draws every layout at one scale, so an offcut looks small."""
+    """Fraction of the full width that draws every layout at one scale, so a small piece looks small."""
     longest = max(lay.stock.length for lay in layouts)
     return max(0.15, layout.stock.length / longest)
+
+
+BADGE_W, BADGE_H = 17, 14
+
+# Distinct, print-friendly colors for lettered pieces (no red: that's the cut lines).
+PIECE_COLORS = ("#1f6feb", "#2e9e44", "#e8890c", "#8e44ad", "#0aa3a3", "#e0457b", "#a68a00", "#1b2f6b")
+
+
+def piece_colors(layout: Layout) -> dict[str, str]:
+    """A color per lettered piece, never the same as the piece it was cut from."""
+    colors: dict[str, str] = {}
+    n = 0
+    for step in layout.steps:
+        parent = colors.get(step.piece_label)
+        for seg in step.segments:
+            if seg.kind != "piece":
+                continue
+            color = PIECE_COLORS[n % len(PIECE_COLORS)]
+            n += 1
+            if color == parent:
+                color = PIECE_COLORS[n % len(PIECE_COLORS)]
+                n += 1
+            colors[seg.label] = color
+    return colors
+
+
+def _badge_spot(x: float, y: float, w: float, h: float, taken: list[tuple[float, float]]) -> tuple[float, float]:
+    """Top-left of a letter badge inside a piece, clear of every badge already placed.
+
+    Tries each corner first, then steps inward from the corners (sideways and up/down).
+    """
+    pad = 2
+    step_x, step_y = BADGE_W + pad, BADGE_H + pad
+    cols = max(1, int((w - pad) // step_x))
+    rows = max(1, int((h - pad) // step_y))
+    left, right = x + pad, x + w - BADGE_W - pad
+    top, bottom = y + pad, y + h - BADGE_H - pad
+    candidates = []
+    for ring in range(max(cols, rows)):
+        for k in range(min(ring, cols - 1) + 1):
+            j = ring - k
+            if j >= rows:
+                continue
+            candidates += [
+                (right - k * step_x, top + j * step_y),
+                (left + k * step_x, top + j * step_y),
+                (right - k * step_x, bottom - j * step_y),
+                (left + k * step_x, bottom - j * step_y),
+            ]
+    # Too thin to hold a free spot inside: the nearest free spot around its middle.
+    cx, cy = x + w / 2 - BADGE_W / 2, y + h / 2 - BADGE_H / 2
+    for r in range(1, 8):
+        for dx in range(-r, r + 1):
+            for dy in range(-r, r + 1):
+                if max(abs(dx), abs(dy)) == r:
+                    candidates.append((cx + dx * step_x, cy + dy * step_y))
+    for bx, by in candidates:
+        if all(abs(bx - tx) >= BADGE_W or abs(by - ty) >= BADGE_H for tx, ty in taken):
+            taken.append((bx, by))
+            return bx, by
+    taken.append((right, top))
+    return right, top
 
 
 def layout_svg(
@@ -65,12 +127,12 @@ def layout_svg(
         return r.x * scale, (stock.width - r.y - r.h) * scale, r.w * scale, r.h * scale
 
     out = [
-        f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="-1 -1 {width_px + 2:.1f} {height_px + 2:.1f}" '
+        f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="-1 -1 {width_px + 2:.1f} {height_px + 2:.1f}" preserveAspectRatio="xMinYMin meet" '
         + (f'width="{relative * 100:.1f}%" ' if relative else f'width="{width_px + 2:.0f}" height="{height_px + 2:.0f}" ')
         + 'font-family="system-ui, sans-serif">',
         f'<rect x="0" y="0" width="{width_px:.1f}" height="{height_px:.1f}" fill="{SHEET_FILL}" stroke="#555"/>',
     ]
-    for r in layout.offcuts:
+    for r in [*layout.offcuts, *layout.scrap]:
         x, y, w, h = px(r)
         out.append(
             f'<rect x="{x:.2f}" y="{y:.2f}" width="{w:.2f}" height="{h:.2f}" fill="{OFFCUT_FILL}" '
@@ -85,17 +147,25 @@ def layout_svg(
             f"</title></rect>"
         )
         out.append(_text_block([p.label, fmt.dims(p.part.length, p.part.width)], p.rect, px))
-    outlines = []
+    outlines, letters = [], []  # letters are drawn after every outline so none gets covered
+    colors = piece_colors(layout)
+    taken: list[tuple[float, float]] = []  # badge top-left corners already used
     for step in layout.steps:
         x0, y0, w0, h0 = px(step.piece)
         if step.piece_label:
+            bx, by = _badge_spot(x0, y0, w0, h0, taken)
+            color = colors.get(step.piece_label, PIECE)
+            hidden = "" if pieces else ' opacity="0"'
             outlines.append(
-                f'<g class="piece" data-piece="{step.piece_label}"{"" if pieces else " opacity=\"0\""}>'
+                f'<g class="piece" data-piece="{step.piece_label}"{hidden}>'
                 f'<rect x="{x0 + 1.5:.1f}" y="{y0 + 1.5:.1f}" width="{max(w0 - 3, 1):.1f}" height="{max(h0 - 3, 1):.1f}" '
-                f'fill="none" stroke="{PIECE}" stroke-width="2" stroke-dasharray="6 3"/>'
-                f'<rect x="{x0 + w0 - 19:.1f}" y="{y0 + 2:.1f}" width="17" height="14" rx="3" fill="{PIECE}"/>'
-                f'<text x="{x0 + w0 - 10.5:.1f}" y="{y0 + 9.5:.1f}" font-size="10" font-weight="700" fill="#fff" '
-                f'text-anchor="middle" dominant-baseline="middle">{step.piece_label}</text></g>'
+                f'fill="none" stroke="{color}" stroke-width="2"/></g>'
+            )
+            letters.append(
+                f'<g class="letter" data-piece="{step.piece_label}"{hidden}>'
+                f'<rect x="{bx:.1f}" y="{by:.1f}" width="{BADGE_W}" height="{BADGE_H}" rx="3" fill="{color}"/>'
+                f'<text x="{bx + BADGE_W / 2:.1f}" y="{by + BADGE_H / 2 + 0.5:.1f}" font-size="10" font-weight="700" '
+                f'fill="#fff" text-anchor="middle" dominant-baseline="middle">{step.piece_label}</text></g>'
             )
         if step.direction == "trim":
             left, right, bottom, top = (t * scale for t in layout.trims)
@@ -123,5 +193,6 @@ def layout_svg(
                 out.append(f'<line data-step="{step.number}" x1="{xx:.1f}" y1="{y0:.1f}" x2="{xx:.1f}" '
                            f'y2="{y0 + h0:.1f}" stroke="{CUT}" stroke-width="1" stroke-opacity="0.75"/>')
     out.extend(outlines)
+    out.extend(letters)
     out.append("</svg>")
     return "\n".join(out)

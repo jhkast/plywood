@@ -57,9 +57,8 @@ def _optimize(args: argparse.Namespace) -> int:
             f"{fmt.thickness(lay.stock.thickness):<8} {src:<8} {len(lay.placements):>3} parts  "
             f"waste {lay.waste_pct:5.1f}%"
         )
-    cost = f", ${result.purchase_cost:,.2f}" if result.purchase_cost else ""
     print(
-        f"\n{len(result.layouts)} pieces of stock ({len(result.purchased)} to buy{cost}), "
+        f"\n{len(result.layouts)} pieces of stock ({len(result.purchased)} to buy), "
         f"waste {result.waste_pct:.1f}%, {result.iterations} layouts tried"
     )
     for u in result.unplaced:
@@ -75,7 +74,7 @@ def main(argv: list[str] | None = None) -> int:
     sub = ap.add_subparsers(dest="command", required=True)
     op = sub.add_parser("optimize", help="optimize a parts CSV")
     op.add_argument("parts", help="parts CSV (name,length,width,thickness,qty,grain,tag,kind) or an Onshape BOM CSV export")
-    op.add_argument("--stock", help="stock CSV: name,length,width,thickness,qty,cost,tag,kind")
+    op.add_argument("--stock", help="stock CSV: name,length,width,thickness,qty,tag,kind")
     op.add_argument("--units", choices=("in", "mm"), default="in", help="default input unit and display unit")
     op.add_argument("--denominator", type=int, default=16, help="inch fraction precision (default 16)")
     op.add_argument("--kerf", default="1/8in", help="kerf for both rips and crosscuts")

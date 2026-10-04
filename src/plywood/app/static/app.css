@@ -74,12 +74,10 @@ button.ghost { border-color: transparent; background: transparent; color: var(--
 .flash.error { background: var(--bad-bg); }
 .flash.warn { background: var(--warn-bg); }
 
-main { flex: 1; display: grid; grid-template-columns: 620px 6px 1fr; min-height: 0; }
-.splitter { cursor: col-resize; background: var(--line); }
-.splitter:hover { background: var(--accent); }
+main { flex: 1; display: flex; min-height: 0; }
 
 /* left: tables */
-.left { display: flex; flex-direction: column; min-height: 0; min-width: 0; background: var(--panel); }
+.workspace { flex: 1; display: flex; flex-direction: column; min-height: 0; min-width: 0; background: var(--panel); }
 .tabs { display: flex; gap: 2px; padding: 8px 12px 0; border-bottom: 1px solid var(--line); }
 .tabs button { border: 0; border-bottom: 2px solid transparent; border-radius: 0; background: none; padding: 7px 12px; color: var(--muted); }
 .tabs button.on { color: var(--text); border-bottom-color: var(--accent); font-weight: 600; }
@@ -87,7 +85,7 @@ main { flex: 1; display: grid; grid-template-columns: 620px 6px 1fr; min-height:
 .panel { overflow: auto; padding: 10px 12px 24px; flex: 1; }
 .tools { display: flex; gap: 6px; margin-bottom: 8px; }
 
-table.grid { width: 100%; min-width: 660px; border-collapse: collapse; table-layout: fixed; }
+table.grid { width: 100%; min-width: 660px; max-width: 1100px; border-collapse: collapse; table-layout: fixed; }
 table.grid th {
   text-align: left; font-weight: 600; font-size: 12px; color: var(--muted);
   padding: 4px 3px; border-bottom: 1px solid var(--line); position: sticky; top: 0; background: var(--panel);
@@ -121,7 +119,7 @@ code { font-size: 12px; background: var(--bg); padding: 1px 4px; border-radius: 
 .settings input.bad { border-color: var(--bad); background: var(--bad-bg); }
 
 /* right: results */
-.right { overflow: auto; padding: 12px 18px 40px; min-height: 0; min-width: 0; }
+.panel.output { padding: 12px 18px 40px; background: var(--bg); }
 .status { min-height: 28px; margin-bottom: 6px; display: grid; gap: 8px; }
 .priority { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-size: 13px; }
 .stats { display: flex; gap: 18px; flex-wrap: wrap; font-size: 14px; }
@@ -154,12 +152,21 @@ code { font-size: 12px; background: var(--bg); padding: 1px 4px; border-radius: 
 .summary .warn ul { margin: 4px 0 0; padding-left: 18px; }
 .muted { color: var(--muted); }
 
-.sheet { background: var(--sheet-card); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; margin: 12px 0; }
+.sheet { background: var(--sheet-card); border: 1px solid var(--line); border-radius: 8px; padding: 0 14px 12px; margin: 12px 0; }
+/* Title and picture stay pinned while that sheet's cut steps scroll past, then leave with the sheet. */
+.sheethead { position: sticky; top: -12px; z-index: 1; background: var(--sheet-card); padding: 12px 0 8px;
+  border-bottom: 1px solid var(--line); }
+/* Wide windows: picture pinned on the left, cut steps beside it. */
+@media (min-width: 1100px) {
+  .sheet { display: grid; grid-template-columns: minmax(0, 3fr) minmax(340px, 2fr); column-gap: 24px; align-items: start; }
+  .sheethead { border-bottom: 0; }
+  .sheethead .svgwrap svg { max-height: calc(100vh - 190px); }
+  .sheetsteps { margin-top: 12px; }
+}
 .sheet h3 { margin: 0 0 2px; font-size: 15px; }
 .sheet p { margin: 0 0 8px; font-size: 12.5px; }
-.svgwrap svg { height: auto; display: block; }
-details { margin-top: 8px; }
-summary { cursor: pointer; color: var(--muted); font-size: 13px; }
+.svgwrap svg { height: auto; max-height: 50vh; display: block; }
+.sheetsteps { margin-top: 8px; }
 ol.steps { list-style: none; padding: 0; margin: 8px 0 0; font-size: 13.5px; }
 ol.steps li { display: grid; grid-template-columns: 22px max-content 14px 1fr; gap: 6px; margin: 0 0 4px; padding: 3px 4px; border-radius: 6px; align-items: start; }
 ol.steps li:hover { background: var(--bg); }
@@ -171,6 +178,8 @@ ol.steps .num { flex: none; width: 22px; height: 22px; border-radius: 50%; backg
 .chips { display: flex; flex-wrap: wrap; gap: 5px; }
 .chip { border-radius: 4px; padding: 1px 7px; font-size: 13px; border: 1px solid transparent; }
 .chip.part { background: #ead7b0; color: #2b2116; }
-.chip.piece, .chip.source { border-color: #2d6fb3; }
-.chip.offcut { background: #e3ecdc; color: #2f4a25; }
-.chip.scrap { color: var(--muted); border-color: var(--line); border-style: dashed; }
+.chip.source, .chip.piece { border-color: var(--muted); }
+.letter { color: #fff; border-radius: 3px; padding: 0 4px; }
+/* Hovered step: its piece's outline and its cut lines get heavier. */
+.svgwrap g.piece.hot rect:first-of-type { stroke-width: 4; }
+.chip.leftover { color: var(--muted); border-color: var(--muted); border-style: dashed; }

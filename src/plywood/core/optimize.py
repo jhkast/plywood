@@ -25,7 +25,7 @@ def _stock_orders(stocks: list[Stock]) -> list[list[int]]:
     on_hand = [i for i, s in enumerate(stocks) if s.on_hand]
     buy = sorted(
         (i for i, s in enumerate(stocks) if not s.on_hand),
-        key=lambda i: (stocks[i].cost / (stocks[i].length * stocks[i].width), -stocks[i].length * stocks[i].width),
+        key=lambda i: -stocks[i].length * stocks[i].width,
     )
     area = lambda i: stocks[i].length * stocks[i].width  # noqa: E731
     smallest_first = sorted(on_hand, key=area) + buy

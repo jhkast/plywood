@@ -65,7 +65,6 @@ class Stock:
     width: float
     thickness: float
     qty: int | None = None  # on-hand count; None means buy as many as needed
-    cost: float = 0.0  # per piece, counted only for purchased stock
     tag: str | None = None
     kind: StockKind = StockKind.SHEET
     # Edges to trim, as seen in the diagram: l/r = the ends, b/t = the long sides. None = no edges.
@@ -183,10 +182,6 @@ class Result:
     @property
     def purchased(self) -> list[Layout]:
         return [lay for lay in self.layouts if not lay.stock.on_hand]
-
-    @property
-    def purchase_cost(self) -> float:
-        return sum(lay.stock.cost for lay in self.purchased)
 
     @property
     def waste_pct(self) -> float:

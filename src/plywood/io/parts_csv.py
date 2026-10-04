@@ -21,7 +21,6 @@ _ALIASES = {
     "qty": ("qty", "quantity", "count", "pcs"),
     "grain": ("grain",),
     "tag": ("tag",),
-    "cost": ("cost", "price"),
     "trim_edges": ("trim edges", "trim_edges", "trim"),
     "kind": ("kind", "type"),
 }
@@ -100,7 +99,6 @@ def read_stock_text(text: str, default_unit: str = "in") -> list[Stock]:
                 width=parse_length(_required(row, "width", n), default_unit),
                 thickness=parse_length(_required(row, "thickness", n), default_unit),
                 qty=int(qty) if qty else None,
-                cost=float(row.get("cost") or 0),
                 trim_edges=_edges(row.get("trim_edges")),
                 tag=row.get("tag") or None,
                 kind=StockKind.parse(row.get("kind")),
