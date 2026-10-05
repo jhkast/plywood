@@ -9,16 +9,27 @@ async function api(method, ...args) {
   return res.json();
 }
 
+// Table columns in order: pasted and copied rows use these.
 const FIELDS = {
   parts: ['name', 'length', 'width', 'thickness', 'qty', 'grain', 'kind', 'tag'],
-  stock: ['name', 'length', 'width', 'thickness', 'qty', 'kind', 'tag'],
+  stock: ['kind', 'length', 'width', 'thickness', 'qty', 'trim_edges', 'rough', 'tag'],
 };
 
+// Dimensional lumber: nominal size -> actual thickness and width in inches (as in core/matching.py).
+const ACTUAL = { 1: 0.75, 2: 1.5, 3: 2.5, 4: 3.5, 6: 5.5, 8: 7.25, 10: 9.25, 12: 11.25 };
+const DIMENSIONAL = Object.fromEntries(
+  [[1, [2, 3, 4, 6, 8, 10, 12]], [2, [2, 3, 4, 6, 8, 10, 12]], [4, [4, 6]], [6, [6]]]
+    .flatMap(([t, ws]) => ws.map((w) => [`${t}x${w}`, [ACTUAL[t], ACTUAL[w]]])),
+);
+
 function newRow(table) {
-  const row = { name: '', length: '', width: '', thickness: '', qty: '', kind: 'sheet', tag: '' };
-  if (table === 'parts') row.grain = '';
-  else Object.assign(row, { trim_edges: null, rough: false });
-  return row;
+  if (table === 'parts') return { name: '', length: '', width: '', thickness: '', qty: '', grain: '', kind: 'sheet', tag: '' };
+  return { kind: 'sheet', length: '', width: '', thickness: '', qty: '', trim_edges: null, rough: false, tag: '' };
+}
+
+// Kind as stored: older files said "board", which is hardwood now.
+function kindOf(row) {
+  return row.kind === 'board' ? { ...row, kind: 'hardwood' } : row;
 }
 
 function normTag(tag) {
@@ -63,28 +74,52 @@ function isBlank(row) {
 function normalize(field, value) {
   const v = value.trim().toLowerCase();
   if (field === 'grain') return v.startsWith('l') ? 'length' : v.startsWith('w') ? 'width' : '';
-  if (field === 'kind') return v.startsWith('b') || v.startsWith('lum') ? 'board' : 'sheet';
+  if (field === 'kind') return v.startsWith('d') ? 'dimensional' : /^(h|b|lum|wood|solid)/.test(v) ? 'hardwood' : 'sheet';
+  if (field === 'rough') return /^(y|yes|true|x|1|rough)$/.test(v);
+  if (field === 'trim_edges') return v === 'none' ? '' : 'lrbt'.split('').filter((e) => v.includes(e)).join('');
   return value.trim();
+}
+
+// A cell as copied to the clipboard (the inverse of normalize).
+function cellText(row, field) {
+  if (field === 'rough') return row.rough && row.kind === 'hardwood' ? 'yes' : '';
+  return String(row[field] ?? '').replace(/[\t\r\n]+/g, ' ');
 }
 
 // Columns the CSV importers read (io/parts_csv.py), in table order.
 const EXPORT_COLUMNS = {
   parts: ['name', 'length', 'width', 'thickness', 'qty', 'grain', 'kind', 'tag'],
-  stock: ['name', 'length', 'width', 'thickness', 'qty', 'trim', 'kind', 'rough', 'tag'],
+  stock: ['kind', 'length', 'width', 'thickness', 'qty', 'trim', 'rough', 'tag'],
 };
+
+// 1.5 -> "1-1/2", in sixteenths.
+function inchText(v) {
+  const whole = Math.floor(v + 1e-9);
+  let n = Math.round((v - whole) * 16), d = 16;
+  if (!n) return String(whole);
+  while (n % 2 === 0) { n /= 2; d /= 2; }
+  return whole ? `${whole}-${n}/${d}` : `${n}/${d}`;
+}
 
 function csvCell(v) {
   v = String(v);
   return /[",\r\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v;
 }
 
-// Older files had one kerf for every saw.
+// Older files had a kerf per kind of cut, and before that one kerf for every saw
+// (same mapping as migrate_settings in api.py).
+const OLD_KERFS = { track_saw_kerf: 'sheet_kerf', table_saw_kerf: 'rip_kerf', miter_saw_kerf: 'crosscut_kerf', jig_saw_kerf: 'rough_crosscut_kerf' };
 function migrateSettings(settings) {
   const s = { ...(settings || {}) };
-  if (s.kerf && !s.sheet_kerf) {
-    for (const k of ['sheet_kerf', 'rip_kerf', 'crosscut_kerf', 'rough_crosscut_kerf']) s[k] = s.kerf;
+  if (!Object.keys(OLD_KERFS).some((k) => k in s)) {
+    if (Object.values(OLD_KERFS).some((k) => k in s)) {
+      for (const [now, was] of Object.entries(OLD_KERFS)) if (was in s) s[now] = s[was];
+      s.sheet_saw = 'track';
+    } else if (s.kerf) {
+      for (const k of Object.keys(OLD_KERFS)) s[k] = s.kerf;
+    }
   }
-  delete s.kerf;
+  for (const k of ['kerf', ...Object.values(OLD_KERFS), 'board_width', 'board_length', 'default_boards', 'time_budget']) delete s[k];
   return s;
 }
 
@@ -101,6 +136,11 @@ function plywood() {
     seq: 0,
     keepNext: false,
     menu: null, // open top-row menu: 'import' | 'export'
+    sel: { table: null, rows: [], anchor: 0 }, // rows picked by their row number
+    dimensionalNames: Object.keys(DIMENSIONAL),
+    dialog: null, // 'phone' | 'boards'
+    phone: { code: '', link: '', qr: '' },
+    boardsText: '',
     timers: {},
 
     async init() {
@@ -141,13 +181,35 @@ function plywood() {
     // ---------------------------------------------------------------- tables
 
     isBlank,
-    allTags() {
-      const tags = new Set(['ply', 'mdf']);
+    // Materials already used on rows of one kind (maple ply and solid maple never mix).
+    materials(kind) {
+      const tags = new Set();
       for (const row of [...this.state.parts, ...this.state.stock]) {
-        const tag = String(row.tag || '').trim().toLowerCase();
-        if (tag) tags.add(tag);
+        const tag = normTag(row.tag);
+        if (tag && row.kind === kind) tags.add(tag);
       }
       return [...tags].sort();
+    },
+    // The nominal size (2x4…) a dimensional stock row's width and thickness add up to.
+    inches(text) {
+      const t = String(text || '').trim();
+      const m = t.match(/^(\d+)?(?:[- ]?(\d+)\/(\d+))?\s*("|in)?$/);
+      if (this.state.units === 'mm' || /mm$/.test(t)) return parseFloat(t) / 25.4;
+      if (/^\d*\.\d+"?$/.test(t)) return parseFloat(t);
+      if (!m || (!m[1] && !m[2])) return NaN;
+      return (Number(m[1]) || 0) + (m[2] ? Number(m[2]) / Number(m[3]) : 0);
+    },
+    nominalOf(row) {
+      const t = this.inches(row.thickness), w = this.inches(row.width);
+      return Object.keys(DIMENSIONAL).find((n) => Math.abs(DIMENSIONAL[n][0] - t) < 0.02 && Math.abs(DIMENSIONAL[n][1] - w) < 0.02) || '';
+    },
+    setNominal(row, name) {
+      if (!DIMENSIONAL[name]) return;
+      const [t, w] = DIMENSIONAL[name];
+      const cell = (v) => (this.state.units === 'mm' ? String(+(v * 25.4).toFixed(2)) : inchText(v));
+      row.thickness = cell(t);
+      row.width = cell(w);
+      this.ensureBlank('stock');
     },
     // Every tag with where it's used, split by sheet/board (maple ply and solid maple never mix).
     tagInfo() {
@@ -156,7 +218,7 @@ function plywood() {
         const tag = normTag(row.tag);
         if (!tag || isBlank(row)) return;
         info[tag] ||= { tag, sheetParts: 0, boardParts: 0, sheetStock: 0, boardStock: 0 };
-        info[tag][(row.kind === 'board' ? 'board' : 'sheet') + key] += n;
+        info[tag][(row.kind === 'sheet' ? 'sheet' : 'board') + key] += n;
       };
       for (const row of this.state.parts) add(row, 'Parts', Number(row.qty) || 1);
       for (const row of this.state.stock) add(row, 'Stock', 1);
@@ -164,7 +226,6 @@ function plywood() {
       for (const t of tags) {
         const missing = [];
         if (t.sheetParts && !t.sheetStock) missing.push('sheet');
-        if (t.boardParts && !t.boardStock) missing.push('board');
         t.note = missing.length ? `no ${missing.join('/')} stock` : '';
       }
       return tags;
@@ -207,7 +268,8 @@ function plywood() {
       return t;
     },
     stockPlaceholder(row, f) {
-      if (f === 'qty') return 'buy';
+      if (f === 'qty') return '0';
+      if (f === 'length' && row.kind === 'dimensional' && !Number(row.qty)) return 'any';
       return '';
     },
     // Trimmed edges of a stock row: l/r = ends, b/t = long sides.
@@ -228,6 +290,76 @@ function plywood() {
     },
     removeRow(table, i) {
       this.state[table].splice(i, 1);
+      this.clearSel();
+      this.ensureBlank(table);
+    },
+
+    // ---------------------------------------------------------------- row selection
+
+    isSelected(table, i) {
+      return this.sel.table === table && this.sel.rows.includes(i);
+    },
+    clearSel() {
+      if (this.sel.rows.length) this.sel = { table: null, rows: [], anchor: 0 };
+    },
+    // Click = just this row (again = none), Shift = range from the last click, Ctrl = add/remove.
+    select(e, table, i) {
+      const same = this.sel.table === table;
+      let rows;
+      if (e.shiftKey && same) {
+        const [a, b] = [Math.min(this.sel.anchor, i), Math.max(this.sel.anchor, i)];
+        rows = Array.from({ length: b - a + 1 }, (_, k) => a + k).filter((k) => !isBlank(this.state[table][k]));
+        this.sel = { table, rows, anchor: this.sel.anchor };
+        return;
+      }
+      if ((e.ctrlKey || e.metaKey) && same) {
+        rows = this.sel.rows.includes(i) ? this.sel.rows.filter((k) => k !== i) : [...this.sel.rows, i];
+      } else {
+        rows = same && this.sel.rows.length === 1 && this.sel.rows[0] === i ? [] : [i];
+      }
+      this.sel = { table, rows: rows.sort((a, b) => a - b), anchor: i };
+    },
+    rowKeys(e) {
+      if (!this.sel.rows.length || this.sel.table !== this.tab) return;
+      const el = document.activeElement;
+      if (el && ['INPUT', 'SELECT', 'TEXTAREA'].includes(el.tagName)) return;
+      const ctrl = e.ctrlKey || e.metaKey;
+      const key = e.key.toLowerCase();
+      if (ctrl && key === 'd') this.duplicateRows();
+      else if (ctrl && key === 'c') this.copyRows();
+      else if (key === 'delete' || key === 'backspace') this.deleteRows();
+      else if (key === 'escape') this.clearSel();
+      else return;
+      e.preventDefault();
+    },
+    duplicateRows() {
+      const { table, rows } = this.sel;
+      const list = this.state[table];
+      const copies = rows.map((i) => JSON.parse(JSON.stringify(list[i])));
+      const at = rows[rows.length - 1] + 1;
+      list.splice(at, 0, ...copies);
+      this.sel = { table, rows: copies.map((_, k) => at + k), anchor: at };
+      this.ensureBlank(table);
+    },
+    // Tab-separated, one line per row: pastes into a spreadsheet, or back into either table.
+    async copyRows() {
+      const { table, rows } = this.sel;
+      const text = rows.map((i) => FIELDS[table].map((f) => cellText(this.state[table][i], f)).join('\t')).join('\n') + '\n';
+      try {
+        await navigator.clipboard.writeText(text);
+      } catch {
+        const ta = Object.assign(document.createElement('textarea'), { value: text });
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        ta.remove();
+      }
+      this.say(`Copied ${rows.length} ${rows.length > 1 ? 'rows' : 'row'}`);
+    },
+    deleteRows() {
+      const { table, rows } = this.sel;
+      this.state[table] = this.state[table].filter((_, i) => !rows.includes(i));
+      this.clearSel();
       this.ensureBlank(table);
     },
     clearTable(table) {
@@ -244,6 +376,7 @@ function plywood() {
       const text = e.clipboardData.getData('text');
       if (!/[\t\n]/.test(text.trim())) return; // single value: let the browser handle it
       e.preventDefault();
+      this.clearSel();
       const cols = FIELDS[table];
       const start = cols.indexOf(field);
       const lines = text.replace(/\r/g, '').split('\n').filter((l) => l.trim());
@@ -408,8 +541,8 @@ function plywood() {
       this.state.job = job.job || file.name.replace(/\.json$/i, '');
       if (job.denominator) this.state.denominator = job.denominator;
       this.state.settings = { ...this.state.settings, ...migrateSettings(job.settings) };
-      this.state.parts = job.parts.map((r) => ({ ...newRow('parts'), ...r }));
-      if (Array.isArray(job.stock)) this.state.stock = job.stock.map((r) => ({ ...newRow('stock'), ...r }));
+      this.state.parts = job.parts.map((r) => ({ ...newRow('parts'), ...kindOf(r) }));
+      if (Array.isArray(job.stock)) this.state.stock = job.stock.map((r) => ({ ...newRow('stock'), ...kindOf(r) }));
       this.plan = job.result || null;
       this.keepNext = true; // shown exactly as saved
       this.ensureBlank('parts');
@@ -423,11 +556,12 @@ function plywood() {
       if (!rows.length) return this.say(`No ${table} to export.`, 'error');
       const cols = EXPORT_COLUMNS[table];
       const value = (row, c) => {
-        if (c === 'rough') return row.rough && row.kind === 'board' ? 'yes' : '';
+        if (c === 'rough') return row.rough && row.kind === 'hardwood' ? 'yes' : '';
         if (c === 'trim') return row.trim_edges == null ? '' : row.trim_edges || 'none';
         return row[c] ?? '';
       };
-      const lines = [cols.join(','), ...rows.map((r) => cols.map((c) => csvCell(value(r, c))).join(','))];
+      const header = cols.map((c) => (c === 'tag' ? 'material' : c));
+      const lines = [header.join(','), ...rows.map((r) => cols.map((c) => csvCell(value(r, c))).join(','))];
       this.saveText(`${this.fileBase()} ${table}.csv`, lines.join('\r\n') + '\r\n', 'text/csv');
     },
     exportSettings() {
@@ -457,6 +591,51 @@ function plywood() {
     reoptimize() {
       this.plan = null;
       this.run();
+    },
+
+    // ---------------------------------------------------------------- phone shopping list
+
+    async openPhone() {
+      if (this.result?.stale) return this.say(this.result.message, 'error');
+      const r = await this.call('phone_job');
+      if (!r.ok) return this.say(r.message, 'error');
+      this.phone.code = r.code;
+      this.makePhoneLink();
+      this.dialog = 'phone';
+    },
+    makePhoneLink() {
+      const base = String(this.state.phone_url || '').trim().replace(/#.*$/, '');
+      this.phone.link = base ? base + '#j=' + this.phone.code : '';
+      this.phone.qr = '';
+      if (!this.phone.link || typeof qrcode === 'undefined') return;
+      try {
+        const qr = qrcode(0, 'L'); // a screen is clean: least error correction, biggest squares
+        qr.addData(this.phone.link);
+        qr.make();
+        this.phone.qr = qr.createSvgTag({ cellSize: 4, margin: 4, scalable: true });
+      } catch {} // too long for any QR code
+    },
+    async copyText(text) {
+      try {
+        await navigator.clipboard.writeText(text);
+      } catch {
+        const ta = Object.assign(document.createElement('textarea'), { value: text });
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        ta.remove();
+      }
+      this.say('Copied');
+    },
+    async addBoards() {
+      const r = await api('import_boards', this.boardsText, this.state.units, this.state.denominator);
+      if (!r.ok) return this.say(`Couldn't read that: ${r.message}`, 'error');
+      const n = r.rows.reduce((sum, row) => sum + Number(row.qty), 0);
+      this.state.stock = [...this.state.stock.filter((row) => !isBlank(row)), ...r.rows];
+      this.ensureBlank('stock');
+      this.dialog = null;
+      this.tab = 'stock';
+      this.say(`Added ${n} ${n === 1 ? 'board' : 'boards'} on hand`);
     },
     async exportCsv() {
       if (this.result?.stale) return this.say(this.result.message, 'error');

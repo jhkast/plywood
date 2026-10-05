@@ -59,6 +59,19 @@ button.ghost { border-color: transparent; background: transparent; color: var(--
 
 .app { display: flex; flex-direction: column; height: 100vh; }
 
+.dialog-bg { position: fixed; inset: 0; z-index: 50; background: rgba(0,0,0,.35); display: grid; place-items: center; padding: 16px; }
+.dialog { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px 18px; width: min(440px, 100%);
+  display: grid; gap: 12px; box-shadow: 0 10px 40px rgba(0,0,0,.3); }
+.dialog h3 { margin: 0; font-size: 16px; }
+.dialog label { display: grid; gap: 4px; font-size: 13px; font-weight: 600; }
+.dialog input, .dialog textarea { border: 1px solid var(--line); background: var(--input); border-radius: 6px; padding: 6px 8px; font: inherit; font-weight: 400; width: 100%; }
+.dialog textarea { resize: vertical; font-size: 12px; }
+.dialog .qr { background: #fff; border-radius: 8px; padding: 6px; width: 300px; max-width: 100%; margin: 4px auto; }
+.dialog .qr svg { display: block; width: 100%; height: auto; }
+.dialog .linkrow { display: flex; gap: 6px; margin-top: 8px; }
+.dialog .linkrow input { font-size: 12px; }
+.dialog .buttons { display: flex; gap: 8px; justify-content: flex-end; }
+
 /* header */
 .bar {
   display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
@@ -97,14 +110,25 @@ table.grid th {
   text-align: left; font-weight: 600; font-size: 12px; color: var(--muted);
   padding: 4px 3px; border-bottom: 1px solid var(--line); position: sticky; top: 0; background: var(--panel);
 }
-col.dim { width: 60px; } col.qty { width: 46px; } col.sel { width: 72px; } col.tag { width: 92px; } col.x { width: 22px; }
-col.grain { width: 58px; } col.edges { width: 50px; } col.rough { width: 46px; }
+col.dim { width: 60px; } col.qty { width: 46px; } col.sel { width: 104px; } col.tag { width: 92px; } col.x { width: 22px; }
+col.grain { width: 58px; } col.edges { width: 74px; } col.rough { width: 46px; } col.num { width: 34px; } col.onhand { width: 62px; } col.size { width: 78px; }
+.summary h3, .summary .find h3 { margin: 18px 0 4px; font-size: 15px; } .summary.shopping > h3:first-child, .summary.shopping > .find:first-child h3 { margin-top: 4px; } .summary .find h4 { margin: 12px 0 2px; font-size: 14px; }
+.summary .find p { margin: 0 0 2px; font-size: 13px; }
+table.grid.stock { min-width: 680px; max-width: 900px; } col.mat { width: auto; }
 td.center { text-align: center; }
-svg.edges { width: 40px; height: 24px; display: block; margin: auto; }
+svg.edges { width: 60px; height: 32px; display: block; margin: auto; }
 svg.edges rect { fill: #ead7b0; opacity: 0.6; }
-svg.edges line { stroke: var(--line); stroke-width: 4; stroke-linecap: round; cursor: pointer; }
-svg.edges line.on { stroke: #c0392b; }
-svg.edges line:hover { stroke-width: 5; }
+svg.edges line { stroke: var(--muted); stroke-opacity: 0.45; stroke-width: 5; stroke-linecap: round; cursor: pointer; }
+svg.edges line.on { stroke: #c0392b; stroke-opacity: 1; }
+svg.edges line:hover { stroke: var(--accent); stroke-opacity: 1; stroke-width: 7; }
+svg.edges line.on:hover { stroke: #e0533f; }
+td.rownum { text-align: right; }
+td.rownum button { border: 0; background: none; color: var(--muted); padding: 2px 6px; font-size: 12px; font-variant-numeric: tabular-nums; border-radius: 4px; }
+td.rownum button:hover { color: var(--text); background: var(--bg); }
+td.rownum button.on { background: var(--accent); color: var(--accent-ink); }
+table.grid tr.sel td { background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.rowbar { display: flex; gap: 6px; align-items: center; margin-left: 12px; padding-left: 12px; border-left: 1px solid var(--line); }
+.tools { align-items: center; min-height: 32px; }
 table.grid td { padding: 1px 2px; }
 table.grid input, table.grid select {
   width: 100%; border: 1px solid transparent; background: transparent; border-radius: 4px; padding: 4px 5px;

@@ -99,18 +99,18 @@ def test_tag_restricts_stock():
 
 
 def test_boards_never_rotate_free_parts():
-    board = Stock("1x4", 96 * IN, 3.5 * IN, 0.75 * IN, kind=StockKind.BOARD)
-    r = optimize([part("rail", 30, 1.5, qty=6, thickness=0.75 * IN, kind=StockKind.BOARD)], [board], fast())
+    board = Stock("1x4", 96 * IN, 3.5 * IN, 0.75 * IN, kind=StockKind.DIMENSIONAL)
+    r = optimize([part("rail", 30, 1.5, qty=6, thickness=0.75 * IN, kind=StockKind.DIMENSIONAL)], [board], fast())
     assert check(r) == []
     assert all(not p.rotated for lay in r.layouts for p in lay.placements)
     assert len(r.layouts) == 1  # 3 per row × 2 rows on one board
 
 
 def test_sheet_and_board_parts_never_mix():
-    board = Stock("1x4", 96 * IN, 3.5 * IN, 0.75 * IN, kind=StockKind.BOARD)
+    board = Stock("1x4", 96 * IN, 3.5 * IN, 0.75 * IN, kind=StockKind.DIMENSIONAL)
     ply = sheet(thickness=0.75 * IN, name="ply")
     parts = [
-        part("rail", 30, 1.5, qty=2, thickness=0.75 * IN, kind=StockKind.BOARD),
+        part("rail", 30, 1.5, qty=2, thickness=0.75 * IN, kind=StockKind.DIMENSIONAL),
         part("cleat", 30, 1.5, qty=2, thickness=0.75 * IN),  # sheet part that would fit a board
     ]
     r = optimize(parts, [board, ply], fast())
@@ -119,9 +119,34 @@ def test_sheet_and_board_parts_never_mix():
     assert by_name == {"rail": "1x4", "cleat": "ply"}
 
 
-def test_board_part_without_board_stock_is_unplaced_when_not_assuming_boards():
-    r = optimize([part("rail", 30, 1.5, thickness=0.75 * IN, kind=StockKind.BOARD)], [], fast(default_boards=False))
-    assert placed(r) == 0 and "no board stock" in r.unplaced[0].reason
+def test_hardwood_part_without_a_board_goes_on_the_shopping_list():
+    r = optimize([part("rail", 30, 1.5, thickness=0.75 * IN, kind=StockKind.HARDWOOD)], [], fast())
+    assert placed(r) == 0 and not r.unplaced and r.layouts == []
+    assert r.to_find[0].count == 1 and "no hardwood stock" in r.to_find[0].reason
+
+
+def test_dimensional_part_without_stock_comes_from_a_standard_size():
+    r = optimize([part("stretcher", 30, 2.5, qty=3, thickness=1.5 * IN, kind=StockKind.DIMENSIONAL)], [], fast())
+    assert placed(r) == 3 and check(r) == [] and not r.to_find
+    (lay,) = r.layouts
+    assert lay.stock.name == "2x3" and lay.stock.length == 96 * IN  # 3 x 30" fits the shortest 2x3
+    assert not [st for st in lay.steps if st.direction == "plane"]
+
+
+def test_dimensional_rips_from_a_wider_stick_and_planes_only_when_thinner():
+    s = fast(default_dimensional=True)
+    r = optimize([part("slat", 40, 2.5, qty=2, thickness=1.5 * IN, kind=StockKind.DIMENSIONAL)],
+                 [Stock("2x6", 96 * IN, 5.5 * IN, 1.5 * IN, kind=StockKind.DIMENSIONAL)], s)
+    assert placed(r) == 1 * 2 and len(r.layouts) == 1 and check(r) == []
+    thin = optimize([part("slat", 40, 2.5, thickness=1.375 * IN, kind=StockKind.DIMENSIONAL)],
+                    [Stock("2x4", 96 * IN, 3.5 * IN, 1.5 * IN, kind=StockKind.DIMENSIONAL)], s)
+    assert placed(thin) == 1 and [st.direction for st in thin.layouts[0].steps].count("plane") == 1
+
+
+def test_dimensional_and_hardwood_never_mix():
+    r = optimize([part("a", 30, 3, thickness=0.75 * IN, kind=StockKind.HARDWOOD)],
+                 [Stock("1x4", 96 * IN, 3.5 * IN, 0.75 * IN, qty=2, kind=StockKind.DIMENSIONAL)], fast())
+    assert r.layouts == [] and r.to_find[0].count == 1
 
 
 def test_too_big_part_is_reported():
@@ -292,7 +317,7 @@ def test_look_alike_layouts_are_shown_once():
 
 # ---------------------------------------------------------------- lumber: planing, snipe, boards to find
 
-BOARD = StockKind.BOARD
+BOARD = StockKind.HARDWOOD
 
 
 def board(length, width, thickness, qty=None, rough=False, name="board"):
@@ -309,15 +334,15 @@ def planes(r):
 
 def test_board_at_most_max_planing_thicker():
     p = [bpart("rail", 30, 3, 0.75)]
-    s = fast(default_boards=False)
+    s = fast()
     assert placed(optimize(p, [board(96, 6, 1.0)], s)) == 1  # 1/4" over: fine
     r = optimize(p, [board(96, 6, 1.25)], s)  # 1/2" over: too much
-    assert placed(r) == 0 and "no board stock" in r.unplaced[0].reason
+    assert placed(r) == 0 and "no hardwood stock" in r.to_find[0].reason
 
 
 def test_rough_board_must_clean_up():
     p = [bpart("rail", 30, 3, 0.75)]
-    s = fast(default_boards=False)
+    s = fast()
     assert placed(optimize(p, [board(96, 6, 0.75, rough=True)], s)) == 0  # nothing left to joint and plane
     r = optimize(p, [board(96, 6, 0.875, rough=True)], s)
     assert placed(r) == 1 and check(r) == []
@@ -355,18 +380,15 @@ def test_board_steps_crosscut_then_plane_then_cut_up():
         assert steps[i + 1].piece_label == st.piece_label and steps[i + 1].direction == "crosscut"
 
 
-def test_boards_to_find_only_when_nothing_matches():
+def test_hardwood_to_find_only_what_boards_on_hand_dont_cover():
     p = [bpart("rail", 30, 3, 0.75, qty=2), bpart("leg", 28, 1.75, 1.75, qty=4)]
     r = optimize(p, [], fast())
-    finds = {lay.stock.name for lay in r.layouts if lay.stock.find}
-    assert finds == {"4/4 board", "8/4 board"} and check(r) == []
+    assert r.layouts == [] and sum(u.count for u in r.to_find) == 6
     r = optimize(p, [board(96, 6, 0.75), board(96, 4, 2.0)], fast())
-    assert not any(lay.stock.find for lay in r.layouts) and placed(r) == 6 and check(r) == []
-
-
-def test_wide_part_gets_a_wider_board_to_find():
-    r = optimize([bpart("panel", 30, 9, 0.75)], [], fast())
-    assert placed(r) == 1 and r.layouts[0].stock.width >= 9 * IN + fast().edge_joint
+    assert not r.to_find and placed(r) == 6 and check(r) == []
+    r = optimize(p, [board(40, 4, 2.0, qty=1, rough=True)], fast())  # one short board: some legs only
+    legs = sum(u.count for u in r.to_find if u.part.name == "leg")
+    assert 0 < legs < 4 and placed(r) + sum(u.count for u in r.to_find) == 6 and check(r) == []
 
 
 def test_board_plan_restores():
@@ -394,7 +416,7 @@ def test_random_board_jobs_are_valid(seed):
     ]
     r = optimize(parts, stocks, Settings(tries=20, seed=seed))
     assert check(r) == []
-    assert placed(r) + sum(u.count for u in r.unplaced) == sum(p.qty for p in parts)
+    assert placed(r) + sum(u.count for u in r.unplaced + r.to_find) == sum(p.qty for p in parts)
 
 
 def test_each_saw_uses_its_own_kerf():

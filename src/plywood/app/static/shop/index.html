@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#b5762b">
+  <title>Plywood shopping list</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icon.svg">
+  <link rel="stylesheet" href="shop.css">
+  <script src="shop.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.9/dist/cdn.min.js"></script>
+</head>
+<body>
+<div class="app" x-data="shop()" x-cloak>
+  <header>
+    <b class="brand">Plywood</b>
+    <span class="job" x-text="job ? job.job : 'Shopping list'"></span>
+  </header>
+
+  <template x-if="message">
+    <p class="message" :class="messageKind" x-text="message"></p>
+  </template>
+
+  <template x-if="boardsLink">
+    <section class="card">
+      <h2>Boards from the yard</h2>
+      <p>In Plywood on your computer: Import ▾ → Boards from phone, and paste this link.</p>
+      <button @click="copy(boardsLink)">Copy link</button>
+    </section>
+  </template>
+
+  <template x-if="!job && !boardsLink">
+    <section class="card">
+      <h2>No job yet</h2>
+      <p>In Plywood on your computer: Export ▾ → Shopping list for phone, then scan the code.</p>
+    </section>
+  </template>
+
+  <template x-if="job">
+    <div>
+      <div class="status" :class="{enough: plan.enough, busy: busy}">
+        <template x-if="busy"><span x-text="plan.complete === false && plan.cart.length === cart.length ? 'Checking more layouts…' : 'Planning…'"></span></template>
+        <template x-if="!busy && plan.enough"><span>✓ You have enough boards</span></template>
+        <template x-if="!busy && !plan.enough && plan.find.length">
+          <span x-text="'Still to find: ' + plan.find.map(g => g.label).join(', ')"></span>
+        </template>
+        <template x-if="!busy && !plan.enough && !plan.find.length && plan.unplaced.length">
+          <span>Some parts don't fit</span>
+        </template>
+      </div>
+
+      <template x-if="job.buy.length">
+        <section>
+          <h2>Buy</h2>
+          <template x-for="(line, li) in job.buy" :key="line.label">
+            <div class="buy" :class="{done: ticked(li) === line.count + (line.spares || 0)}">
+              <span class="label"><span x-text="line.label"></span><span class="muted" x-show="line.spares" x-text="' (incl. ' + line.spares + ' spare)'"></span></span>
+              <span class="ticks">
+                <template x-for="n in line.count + (line.spares || 0)" :key="n">
+                  <button class="tick" :class="{on: n <= ticked(li)}" @click="tick(li, n)" :aria-label="'Got ' + n"></button>
+                </template>
+              </span>
+            </div>
+          </template>
+        </section>
+      </template>
+
+      <template x-if="groups().length">
+        <section>
+          <h2>Find</h2>
+          <template x-for="g in groups()" :key="g.key">
+            <article class="group" :class="{done: !g.need}">
+              <div class="ghead">
+                <h3 x-text="g.label"></h3>
+                <span class="check" x-show="!g.need">✓ enough</span>
+              </div>
+              <template x-if="g.need">
+                <div>
+                  <p class="facts">
+                    <span><b x-text="feet(g.need)"></b> bd ft</span>
+                    <span>longest <b x-text="g.need.longest"></b></span>
+                    <span>widest <b x-text="g.need.widest"></b></span>
+                  </p>
+                  <ul class="blanks">
+                    <template x-for="b in g.need.blanks">
+                      <li><b x-text="countText(b)"></b> × at least <b x-text="b.size"></b>
+                        <div class="muted" x-text="b.parts"></div></li>
+                    </template>
+                  </ul>
+                </div>
+              </template>
+
+              <template x-for="b in cartIn(g.key)" :key="b.i">
+                <div class="board">
+                  <div>
+                    <b x-text="boardText(b)"></b>
+                    <ul class="parts makes"><template x-for="p in (plan.cart[b.i]?.parts || [])"><li x-text="p"></li></template></ul>
+                    <span class="muted" x-show="!busy && plan.cart[b.i] && !plan.cart[b.i].parts.length">not used</span>
+                  </div>
+                  <button class="remove" @click="removeBoard(b.i)" aria-label="Remove board">×</button>
+                </div>
+              </template>
+
+              <form class="add" @submit.prevent="addBoard(g) && $el.querySelector('input').focus()">
+                <input x-model="form[g.key].length" :placeholder="'Length ' + unitMark()" autocomplete="off" enterkeyhint="next">
+                <span>×</span>
+                <input x-model="form[g.key].width" :placeholder="'Width ' + unitMark()" autocomplete="off" enterkeyhint="done">
+                <select x-model="form[g.key].thickness">
+                  <template x-for="t in thicknesses()" :key="t.value"><option :value="t.value" x-text="t.label" :selected="t.value === form[g.key].thickness"></option></template>
+                </select>
+                <label class="rough"><input type="checkbox" x-model="form[g.key].rough"> rough</label>
+                <button class="primary">Add board</button>
+              </form>
+            </article>
+          </template>
+        </section>
+      </template>
+
+      <template x-if="plan.unplaced.length">
+        <section class="card warn">
+          <h2>Doesn't fit</h2>
+          <ul><template x-for="u in plan.unplaced"><li x-text="u"></li></template></ul>
+        </section>
+      </template>
+
+      <footer>
+        <button class="primary" x-show="cart.length" @click="sendBoards()">Send boards to computer</button>
+        <span class="muted offline" x-text="offlineText()"></span>
+      </footer>
+    </div>
+  </template>
+</div>
+</body>
+</html>

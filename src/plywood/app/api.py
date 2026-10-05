@@ -14,6 +14,7 @@ import webbrowser
 from dataclasses import asdict
 from pathlib import Path
 
+from plywood.app import shop
 from plywood.core.guillotine import PlanError
 from plywood.core.models import Grain, Part, Result, Settings, Stock, StockKind
 from plywood.core.optimize import browse, choose, optimize, restore
@@ -21,7 +22,9 @@ from plywood.core.units import Formatter, parse_length
 from plywood.core.validate import check
 from plywood.io.onshape_bom import looks_like_onshape_bom_text, read_onshape_bom_text
 from plywood.io.parts_csv import cutlist_csv, read_parts_text, read_stock_text
-from plywood.render.report import report_html, sheet_note, sheet_title, steps_html, summary_html
+from plywood.render.report import (
+    report_html, sheet_note, sheet_title, shopping_count, shopping_html, steps_html, summary_html,
+)
 from plywood.render.svg import layout_svg, relative_width
 
 PART_LENGTHS = ("length", "width", "thickness")
@@ -32,12 +35,21 @@ LUMBER_LENGTHS = {
     "edge_joint": "1/16",
     "min_planer_length": "18",
     "snipe": "4",
-    "board_width": "6",
-    "board_length": "96",
 }
-KERFS = ("sheet_kerf", "rip_kerf", "crosscut_kerf", "rough_crosscut_kerf")
+# Settings from older versions with nothing to map to.
+DROPPED = ("time_budget", "board_width", "board_length", "default_boards")
+# Extras: shopping list only, so they never change (or re-run) the layout.
+EXTRAS = {"spare_sheets": 0, "spare_sticks": 1, "spare_pct": 10, "waste_pct": 25}
+DIMENSIONAL_LENGTHS = "8', 10', 12'"
+# Kerf per saw, with defaults in inches. Sheets go on the track saw or the table saw
+# (`sheet_saw`); board rips on the table saw, crosscuts on the miter saw, and rough boards are
+# cut into segments with the jig saw.
+SAW_KERFS = {"track_saw_kerf": "1/16", "table_saw_kerf": "1/8", "miter_saw_kerf": "1/8", "jig_saw_kerf": "1/16"}
+KERFS = tuple(SAW_KERFS)
+# Older saves: a kerf per kind of cut (and before that one kerf for everything).
+OLD_KERFS = {"track_saw_kerf": "sheet_kerf", "table_saw_kerf": "rip_kerf", "miter_saw_kerf": "crosscut_kerf",
+             "jig_saw_kerf": "rough_crosscut_kerf"}
 SETTING_LENGTHS = (*KERFS, "edge_trim", "allowance", *LUMBER_LENGTHS)
-POSITIVE = ("board_width", "board_length")
 
 
 def state_path() -> Path:
@@ -52,12 +64,15 @@ def default_state() -> dict:
         "units": "in",
         "denominator": 16,
         "settings": {
-            **{k: "1/8" for k in KERFS},
+            **SAW_KERFS,
+            "sheet_saw": "track",
             "allowance": "0",
             "edge_trim": "0",
             "default_sheets": True,
-            "default_boards": True,
+            "default_dimensional": True,
+            "dimensional_lengths": DIMENSIONAL_LENGTHS,
             **LUMBER_LENGTHS,
+            **EXTRAS,
             "tries": 1000,
             "priority": "waste",
         },
@@ -66,6 +81,7 @@ def default_state() -> dict:
         "tag_aliases": {},  # misspelling -> tag, applied to every import and optimize
         "tag_distinct": [],  # "a | b" pairs the user said are different materials
         "result": None,  # {"key": inputs_key(...), "sheets": Result.plan}: the cut list shown last
+        "phone_url": "",  # where the phone shopping list page is hosted
     }
 
 
@@ -77,6 +93,11 @@ class FieldError(Exception):
 
 def _blank(row: dict) -> bool:
     return not any(str(row.get(k, "")).strip() for k in ("name", *PART_LENGTHS, "qty"))
+
+
+def _stock_blank(row: dict) -> bool:
+    """Stock rows have no name column; a leftover name from an older save doesn't count."""
+    return not any(str(row.get(k, "")).strip() for k in PART_LENGTHS)
 
 
 def _length(
@@ -115,6 +136,14 @@ def _trim_edges(value) -> str | None:
     return "".join(e for e in "lrbt" if e in str(value).lower())
 
 
+def _lengths_list(text, unit: str) -> tuple[float, ...]:
+    """'8', 10', 12'' -> lengths in mm, shortest first."""
+    values = [parse_length(t, unit) for t in str(text).replace(";", ",").split(",") if t.strip()]
+    if not values or min(values) <= 0:
+        raise ValueError("list one or more lengths, e.g. 8', 10', 12'")
+    return tuple(sorted(set(values)))
+
+
 def parse_state(state: dict) -> tuple[list[Part], list[Stock], Settings, Formatter, list[dict]]:
     unit = state.get("units", "in")
     aliases = state.get("tag_aliases") or {}
@@ -150,27 +179,41 @@ def parse_state(state: dict) -> tuple[list[Part], list[Stock], Settings, Formatt
         except FieldError as e:
             errors.append(e.info)
 
+    s = state.get("settings", {})
+    try:
+        dimensional_lengths = _lengths_list(s.get("dimensional_lengths") or DIMENSIONAL_LENGTHS, unit)
+    except ValueError as e:
+        dimensional_lengths = Settings().dimensional_lengths
+        errors.append({"table": "settings", "index": 0, "field": "dimensional_lengths", "message": str(e)})
+
     for i, row in enumerate(state.get("stock", [])):
-        if _blank(row):
+        if _stock_blank(row):
             continue
         try:
-            stocks.append(
-                Stock(
-                    name=str(row.get("name") or ("Board" if StockKind.parse(row.get("kind")) == StockKind.BOARD else "Sheet")).strip(),
-                    length=_length(row, "stock", i, "length", unit),
-                    width=_length(row, "stock", i, "width", unit),
-                    thickness=_length(row, "stock", i, "thickness", unit),
-                    qty=_int(row, "stock", i, "qty", None),
-                    trim_edges=_trim_edges(row.get("trim_edges")),
-                    tag=tag_of(row),
-                    kind=StockKind.parse(row.get("kind")),
-                    rough=bool(row.get("rough")) and StockKind.parse(row.get("kind")) == StockKind.BOARD,
+            kind = StockKind.parse(row.get("kind"))
+            qty = _int(row, "stock", i, "qty", None) or None  # 0 = have none, buy as needed
+            # Dimensional lumber to buy with no length: whichever standard length wastes least.
+            any_length = kind == StockKind.DIMENSIONAL and qty is None and not str(row.get("length") or "").strip()
+            lengths = dimensional_lengths if any_length else (_length(row, "stock", i, "length", unit),)
+            for length in lengths:
+                stocks.append(
+                    Stock(
+                        name="",  # labeled from its size and material
+                        length=length,
+                        width=_length(row, "stock", i, "width", unit),
+                        thickness=_length(row, "stock", i, "thickness", unit),
+                        qty=qty,
+                        trim_edges=_trim_edges(row.get("trim_edges")),
+                        tag=tag_of(row),
+                        kind=kind,
+                        rough=bool(row.get("rough")) and kind == StockKind.HARDWOOD,
+                    )
                 )
-            )
         except FieldError as e:
             errors.append(e.info)
+        except ValueError as e:
+            errors.append({"table": "stock", "index": i, "field": "kind", "message": str(e)})
 
-    s = state.get("settings", {})
     priority = s.get("priority") if s.get("priority") in ("waste", "balanced", "cuts") else "waste"
     try:
         tries = max(0, int(s.get("tries", 1000)))
@@ -179,20 +222,47 @@ def parse_state(state: dict) -> tuple[list[Part], list[Stock], Settings, Formatt
     settings = Settings(
         tries=tries,
         default_sheets=bool(s.get("default_sheets", True)),
-        default_boards=bool(s.get("default_boards", True)),
+        default_dimensional=bool(s.get("default_dimensional", True)),
+        dimensional_lengths=dimensional_lengths,
         priority=priority,
     )
+    for field, default in EXTRAS.items():
+        try:
+            value = max(0, float(str(s.get(field, default)).strip().rstrip("%") or 0))
+            setattr(settings, field, int(value) if isinstance(default, int) and field.startswith("spare_s") else value)
+        except ValueError:
+            errors.append({"table": "settings", "index": 0, "field": field, "message": "must be a number"})
+    lengths = {}
     for field in SETTING_LENGTHS:
         text = str(s.get(field, "")).strip() or "0"
         try:
-            value = parse_length(text, unit)
-            if field in POSITIVE and value <= 0:
-                raise ValueError("must be more than 0")
-            setattr(settings, field, value)
+            lengths[field] = parse_length(text, unit)
         except ValueError as e:
             errors.append({"table": "settings", "index": 0, "field": field, "message": str(e)})
+    for field, value in lengths.items():
+        if field not in SAW_KERFS:
+            setattr(settings, field, value)
+    saw = "table_saw_kerf" if s.get("sheet_saw") == "table" else "track_saw_kerf"
+    settings.sheet_kerf = lengths.get(saw, 0.0)
+    settings.rip_kerf = lengths.get("table_saw_kerf", 0.0)
+    settings.crosscut_kerf = lengths.get("miter_saw_kerf", 0.0)
+    settings.rough_crosscut_kerf = lengths.get("jig_saw_kerf", 0.0)
     fmt = Formatter(unit, int(state.get("denominator") or 16))
     return parts, stocks, settings, fmt, errors
+
+
+def migrate_settings(settings: dict, old: dict) -> dict:
+    """Saw kerfs from older saves, keeping their values so saved cut lists stay the same."""
+    settings = dict(settings)
+    if not any(k in old for k in SAW_KERFS):
+        if any(k in old for k in OLD_KERFS.values()):
+            settings.update({new: old.get(was, settings[new]) for new, was in OLD_KERFS.items()})
+            settings["sheet_saw"] = "track"
+        elif old.get("kerf"):
+            settings.update({k: old["kerf"] for k in SAW_KERFS})
+    for k in ("kerf", *OLD_KERFS.values()):
+        settings.pop(k, None)
+    return settings
 
 
 def inputs_key(parts: list[Part], stocks: list[Stock], settings: Settings) -> str:
@@ -207,7 +277,8 @@ def inputs_key(parts: list[Part], stocks: list[Stock], settings: Settings) -> st
             return [clean(x) for x in v]
         return v
 
-    data = clean([[asdict(p) for p in parts], [asdict(s) for s in stocks], asdict(settings)])
+    layout = {k: v for k, v in asdict(settings).items() if k not in EXTRAS}
+    data = clean([[asdict(p) for p in parts], [asdict(s) for s in stocks], layout])
     return hashlib.sha1(json.dumps(data, sort_keys=True).encode()).hexdigest()[:16]
 
 
@@ -226,7 +297,6 @@ def part_row(p: Part, fmt: Formatter) -> dict:
 
 def stock_row(s: Stock, fmt: Formatter) -> dict:
     return {
-        "name": s.name,
         "length": fmt.exact(s.length),
         "width": fmt.exact(s.width),
         "thickness": fmt.exact(s.thickness),
@@ -254,15 +324,17 @@ class Api:
             state.update({k: v for k, v in saved.items() if k in state})
             old = saved.get("settings", {})
             state["settings"] = {**default_state()["settings"], **old}
-            if "sheet_kerf" not in old:  # older saves had one kerf for every saw
-                kerf = old.get("kerf") or old.get("rip_kerf") or "1/8"
-                state["settings"].update({k: kerf for k in KERFS})
-            state["settings"].pop("kerf", None)
-            state["settings"].pop("time_budget", None)  # replaced by tries
+            state["settings"] = migrate_settings(state["settings"], old)
+            for k in DROPPED:
+                state["settings"].pop(k, None)
+            for row in [*state["parts"], *state["stock"]]:  # "board" became hardwood
+                if str(row.get("kind", "")).lower() == "board":
+                    row["kind"] = "hardwood"
             if state.get("units") == "mm":  # new settings arrive with inch defaults
                 mm = Formatter("mm")
-                for field, default in LUMBER_LENGTHS.items():
-                    if field not in old:
+                for field, default in {**LUMBER_LENGTHS, **SAW_KERFS}.items():
+                    migrated = field in SAW_KERFS and (old.get("kerf") or OLD_KERFS[field] in old)
+                    if field not in old and not migrated:
                         state["settings"][field] = mm.exact(parse_length(default, "in"))
         except (OSError, ValueError):
             pass
@@ -329,11 +401,13 @@ class Api:
             "ok": True,
             "errors": [],
             "plan": {"key": key, "sheets": result.plan},
-            "summary": summary_html(result, fmt, stats=False),
+            "summary": summary_html(result, fmt, stats=False, shopping=False),
+            "shopping": shopping_html(result, fmt),
             "stats": {
                 "stock": len(result.layouts),
-                "buy": sum(1 for lay in result.purchased if not lay.stock.find),
-                "find": sum(1 for lay in result.layouts if lay.stock.find),
+                "buy": len(result.purchased),
+                "find": sum(u.count for u in result.to_find),
+                "shop": shopping_count(result, fmt),
                 "waste": result.waste_pct,
                 "parts": sum(len(lay.placements) for lay in result.layouts),
                 "cuts": sum(lay.cuts for lay in result.layouts),
@@ -394,6 +468,14 @@ class Api:
                     row[field] = conv(row.get(field, ""))
         for field in SETTING_LENGTHS:
             state["settings"][field] = conv(state["settings"].get(field, ""))
+        try:
+            values = _lengths_list(state["settings"].get("dimensional_lengths") or DIMENSIONAL_LENGTHS, src)
+            feet = to_unit == "in" and all(abs(v / 304.8 - round(v / 304.8)) < 1e-6 for v in values)
+            state["settings"]["dimensional_lengths"] = ", ".join(
+                f"{round(v / 304.8)}'" if feet else fmt.exact(v) for v in values
+            )
+        except ValueError:
+            pass
         state["units"] = to_unit
         return state
 
@@ -409,6 +491,21 @@ class Api:
             "html": report_html(result, fmt, title=state.get("job") or "Cut list"),
             "csv": cutlist_csv(result.layouts, fmt),
         }
+
+    def phone_job(self, state: dict) -> dict:
+        """The job's shopping list as a code for the phone page's link."""
+        parts, stocks, settings, fmt, errors = parse_state(state)
+        if errors or not parts:
+            return {"ok": False, "message": "fix the highlighted cells first" if errors else "no parts"}
+        result, _ = self._solve(state)
+        return {"ok": True, "code": shop.encode(shop.job_payload(state, result, fmt))}
+
+    def import_boards(self, code: str, units: str = "in", denominator: int = 16) -> dict:
+        """Boards bought at the yard (a code or link from the phone) as on-hand Stock rows."""
+        try:
+            return {"ok": True, **shop.cart_rows(code, units, denominator)}
+        except (ValueError, KeyError, TypeError) as e:
+            return {"ok": False, "message": str(e)}
 
     def open_report(self, state: dict) -> dict:
         """Write the printable report to a temp file and open it in the default browser."""

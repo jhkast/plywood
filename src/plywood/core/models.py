@@ -34,16 +34,23 @@ class Grain(StrEnum):
 
 class StockKind(StrEnum):
     SHEET = "sheet"
-    BOARD = "board"
+    DIMENSIONAL = "dimensional"  # surfaced lumber in standard sizes (2x4, 1x6…), always buyable
+    HARDWOOD = "hardwood"  # sold rough by the board foot; what the yard has is found, not ordered
+
+    @property
+    def is_board(self) -> bool:
+        return self is not StockKind.SHEET
 
     @classmethod
     def parse(cls, text: str | None) -> StockKind:
         t = (text or "").strip().lower()
         if t in ("", "sheet", "s", "ply", "plywood", "panel"):
             return cls.SHEET
-        if t in ("board", "b", "lumber", "wood", "solid"):
-            return cls.BOARD
-        raise ValueError(f"unknown kind {text!r} (use sheet or board)")
+        if t in ("dimensional", "dim", "d", "dimension"):
+            return cls.DIMENSIONAL
+        if t in ("hardwood", "h", "hw", "board", "b", "lumber", "wood", "solid"):  # "board": older files
+            return cls.HARDWOOD
+        raise ValueError(f"unknown kind {text!r} (use sheet, dimensional or hardwood)")
 
 
 @dataclass(frozen=True)
@@ -56,6 +63,7 @@ class Part:
     grain: Grain = Grain.NONE
     tag: str | None = None
     kind: StockKind = StockKind.SHEET  # a part is only ever cut from stock of the same kind
+    spare: bool = False  # an extra blank to find (shopping only), not a part of the design
 
 
 @dataclass(frozen=True)
@@ -70,7 +78,6 @@ class Stock:
     # Edges to trim, as seen in the diagram: l/r = the ends, b/t = the long sides. None = no edges.
     trim_edges: str | None = None
     rough: bool = False  # rough-sawn board: every part from it is jointed and planed
-    find: bool = False  # an assumed board to go find (no matching board was listed)
 
     @property
     def on_hand(self) -> bool:
@@ -87,6 +94,7 @@ class Settings:
     allowance: float = 0.0  # rough-cut oversize, total per dimension (parts cut this much bigger)
     thickness_tolerance: float = 0.5  # mm
     default_sheets: bool = True  # add unlimited 4x8 sheets for thicknesses with no stock
+    default_dimensional: bool = True  # add standard dimensional sizes for parts with no stock
     min_offcut: float = 4 * INCH  # offcuts smaller than this in either dimension are scrap
     # Lumber
     max_planing: float = 0.25 * INCH  # a board can be at most this much thicker than its parts
@@ -94,9 +102,12 @@ class Settings:
     edge_joint: float = INCH / 16  # taken off one edge of a rough segment by the jointer
     min_planer_length: float = 18 * INCH
     snipe: float = 4 * INCH  # extra length at each end of a planed segment, cut off after planing
-    board_width: float = 6 * INCH  # typical size assumed for boards to find
-    board_length: float = 96 * INCH
-    default_boards: bool = True  # assume boards to find for board parts with no matching stock
+    dimensional_lengths: tuple[float, ...] = (96 * INCH, 120 * INCH, 144 * INCH)  # lengths you can buy
+    # Extra wood on the shopping list only (never laid out in the cut list)
+    spare_sheets: int = 0  # per kind of sheet bought
+    spare_sticks: int = 1  # per dimensional size bought
+    spare_pct: float = 10.0  # extra hardwood blanks per group of identical blanks, rounded up
+    waste_pct: float = 25.0  # added to the hardwood board-foot estimate (defects, odd widths)
     tries: int = 1000  # random layouts tried after the fixed sweep
     priority: str = "waste"  # after fewest sheets: "waste", "balanced", or "cuts"
     seed: int = 0  # same inputs + same seed = same layout
@@ -193,6 +204,7 @@ class Result:
     iterations: int = 0
     notes: list[str] = field(default_factory=list)
     plan: list[dict] = field(default_factory=list)  # one cutting tree per layout, JSON, for restoring it
+    to_find: list[Unplaced] = field(default_factory=list)  # hardwood parts with no board yet: the shopping list
 
     @property
     def purchased(self) -> list[Layout]:

@@ -12,6 +12,7 @@ from pathlib import Path
 
 from plywood.core.models import Grain, Layout, Part, Stock, StockKind
 from plywood.core.units import Formatter, parse_length
+from plywood.render.report import stock_label
 
 _ALIASES = {
     "name": ("name", "part", "label", "description"),
@@ -20,7 +21,7 @@ _ALIASES = {
     "thickness": ("thickness", "t", "thick"),
     "qty": ("qty", "quantity", "count", "pcs"),
     "grain": ("grain",),
-    "tag": ("tag",),
+    "tag": ("tag", "material"),
     "trim_edges": ("trim edges", "trim_edges", "trim"),
     "kind": ("kind", "type"),
     "rough": ("rough",),
@@ -93,17 +94,17 @@ def read_stock(path: str | Path, default_unit: str = "in") -> list[Stock]:
 
 
 def read_stock_text(text: str, default_unit: str = "in") -> list[Stock]:
-    """Blank qty means buy as many as needed; a number means pieces on hand."""
+    """Blank or 0 qty means buy as many as needed; a number means pieces on hand."""
     stocks = []
     for n, row in enumerate(_rows(text), start=2):
         qty = row.get("qty", "")
         stocks.append(
             Stock(
-                name=row.get("name") or f"Stock {n - 1}",
+                name=row.get("name") or "",
                 length=parse_length(_required(row, "length", n), default_unit),
                 width=parse_length(_required(row, "width", n), default_unit),
                 thickness=parse_length(_required(row, "thickness", n), default_unit),
-                qty=int(qty) if qty else None,
+                qty=int(qty) or None if qty else None,
                 trim_edges=_edges(row.get("trim_edges")),
                 tag=row.get("tag") or None,
                 kind=StockKind.parse(row.get("kind")),
@@ -126,7 +127,7 @@ def cutlist_csv(layouts: list[Layout], fmt: Formatter) -> str:
             w.writerow(
                 [
                     lay.number,
-                    lay.stock.name,
+                    stock_label(lay.stock, fmt),
                     p.label,
                     fmt.bare(p.part.length),
                     fmt.bare(p.part.width),

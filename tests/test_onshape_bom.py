@@ -1,7 +1,7 @@
 import pytest
 
 from plywood.core.models import Grain, StockKind
-from plywood.io.onshape_bom import looks_like_onshape_bom, parse_dims, read_onshape_bom
+from plywood.io.onshape_bom import looks_like_onshape_bom, parse_dims, read_onshape_bom, read_onshape_bom_text
 
 IN = 25.4
 
@@ -14,7 +14,7 @@ def test_parse_dims_inches_full():
 
 def test_parse_dims_mm_board_defaults():
     d = parse_dims("762 x 38.1 x 19.05 mm board")
-    assert d.length == pytest.approx(762) and d.kind == StockKind.BOARD
+    assert d.length == pytest.approx(762) and d.kind == StockKind.HARDWOOD
     assert d.grain == Grain.NONE and d.tag is None
 
 
@@ -43,7 +43,7 @@ def test_flat_bom(tmp_path):
     assert got == {
         "Side": (4, StockKind.SHEET, Grain.LENGTH),
         "Bottom": (2, StockKind.SHEET, Grain.NONE),
-        "Stile": (4, StockKind.BOARD, Grain.NONE),
+        "Stile": (4, StockKind.HARDWOOD, Grain.NONE),
     }
     assert bom.skipped == ["Screw"]
 
@@ -88,3 +88,18 @@ def test_utf8_bom_prefix_is_ignored():
 
     bom = read_onshape_bom_text("﻿Item,Quantity,Name,Title 1\n1,3,Side,10 x 5 x 19.05 mm sheet\n")
     assert bom.parts[0].qty == 3
+
+
+def test_material_column_fills_missing_tag():
+    text = (
+        "Item,Quantity,Name,Material,Title 1\n"
+        "1,2,Side,Birch,30 x 23 x 0.75 in sheet\n"
+        "2,1,Top,Birch,30 x 23 x 0.75 in sheet tag=walnut ply\n"
+    )
+    parts = {p.name: p for p in read_onshape_bom_text(text).parts}
+    assert parts["Side"].tag == "Birch" and parts["Top"].tag == "walnut ply"
+
+
+@pytest.mark.parametrize("word, kind", [("board", "hardwood"), ("hardwood", "hardwood"), ("dimensional", "dimensional"), ("sheet", "sheet")])
+def test_kind_words(word, kind):
+    assert parse_dims(f"762 x 88.9 x 38.1 mm {word}").kind == kind

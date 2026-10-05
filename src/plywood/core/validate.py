@@ -40,7 +40,7 @@ def check(result: Result) -> list[str]:
                 problems.append(f"{where}: grain-locked to length but rotated")
             if p.part.grain == Grain.WIDTH and not p.rotated:
                 problems.append(f"{where}: grain-locked to width but not rotated")
-            if lay.stock.kind == StockKind.BOARD and p.part.grain == Grain.NONE and p.rotated:
+            if lay.stock.kind.is_board and p.part.grain == Grain.NONE and p.rotated:
                 problems.append(f"{where}: rotated across a board")
             if p.part.kind != lay.stock.kind:
                 problems.append(f"{where}: {p.part.kind} part on {lay.stock.kind} stock")

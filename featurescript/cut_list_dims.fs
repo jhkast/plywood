@@ -3,8 +3,9 @@ import(path : "onshape/std/common.fs", version : "2780.0");
 
 // Cut list dims
 // -------------
-// Writes each selected part's size, stock kind, grain and tag into its Title 1 property, e.g.
+// Writes each selected part's size, stock kind, grain and material into its Title 1 property, e.g.
 //     762 x 590.55 x 19.05 mm sheet grain=L tag=birch
+// (kind is sheet, dimensional or hardwood; older versions wrote "board", read as hardwood)
 // Always millimetres, whatever the document units: it's a machine-readable value, and the
 // optimizer displays it in inches, feet or mm as you choose.
 // The plywood optimizer reads that string from an assembly BOM CSV export.
@@ -12,17 +13,23 @@ import(path : "onshape/std/common.fs", version : "2780.0");
 // Setup (once): create a Feature Studio, keep the two lines Onshape generates at the top
 // (they pin the current FeatureScript version), and paste everything below them.
 // Use: add "Cut list dims" at the end of a Part Studio and select parts. Each instance applies one
-// set of options (stock, grain, tag) to any number of parts of any thickness; add another instance
+// set of options (stock, grain, material) to any number of parts of any thickness; add another instance
 // for parts that need different options (e.g. boards, or grain-locked parts).
 //
 // Thickness is measured perpendicular to the part's largest flat face; length and width are
 // measured along that face, aligned to its longest straight edge, so tilted parts measure true.
+//
+// Material: leave it blank to use each part's own Onshape material (the optimizer also reads the
+// BOM's Material column when Title 1 has none); type one in to override it for these parts.
 
 export enum CutListKind
 {
     annotation { "Name" : "Sheet" }
     SHEET,
-    annotation { "Name" : "Board (lumber)" }
+    annotation { "Name" : "Dimensional (2x4, 1x6)" }
+    DIMENSIONAL,
+    // Still BOARD inside, so features made before dimensional lumber existed stay hardwood.
+    annotation { "Name" : "Hardwood" }
     BOARD
 }
 
@@ -37,20 +44,21 @@ export enum CutListGrain
 }
 
 annotation { "Feature Type Name" : "Cut list dims",
-        "Feature Type Description" : "Writes length x width x thickness, stock kind, grain and tag into each part's Title 1 property for the plywood cut list optimizer." }
+        "Feature Type Description" : "Writes length x width x thickness, stock kind, grain and material into each part's Title 1 property for the plywood cut list optimizer." }
 export const cutListDims = defineFeature(function(context is Context, id is Id, definition is map)
     precondition
     {
         annotation { "Name" : "Parts", "Filter" : EntityType.BODY && BodyType.SOLID }
         definition.parts is Query;
 
-        annotation { "Name" : "Stock", "UIHint" : UIHint.HORIZONTAL_ENUM }
+        annotation { "Name" : "Stock" }
         definition.kind is CutListKind;
 
         annotation { "Name" : "Grain", "UIHint" : UIHint.SHOW_LABEL }
         definition.grain is CutListGrain;
 
-        annotation { "Name" : "Tag (optional)" }
+        // Still called "tag" inside, so features made before the rename keep their text.
+        annotation { "Name" : "Material", "Description" : "Blank: each part's own Onshape material" }
         definition.tag is string;
     }
     {
@@ -65,7 +73,18 @@ export const cutListDims = defineFeature(function(context is Context, id is Id, 
             const dims = cutListMeasure(context, body);
             var text = cutListNumber(dims[0] / millimeter) ~ " x " ~ cutListNumber(dims[1] / millimeter) ~ " x " ~
                 cutListNumber(dims[2] / millimeter) ~ " mm";
-            text = text ~ (definition.kind == CutListKind.BOARD ? " board" : " sheet");
+            if (definition.kind == CutListKind.BOARD)
+            {
+                text = text ~ " hardwood";
+            }
+            else if (definition.kind == CutListKind.DIMENSIONAL)
+            {
+                text = text ~ " dimensional";
+            }
+            else
+            {
+                text = text ~ " sheet";
+            }
             if (definition.grain == CutListGrain.LENGTH)
             {
                 text = text ~ " grain=L";
@@ -74,9 +93,10 @@ export const cutListDims = defineFeature(function(context is Context, id is Id, 
             {
                 text = text ~ " grain=W";
             }
-            if (definition.tag != "")
+            const material = definition.tag != "" ? definition.tag : cutListMaterial(context, body);
+            if (material != "")
             {
-                text = text ~ " tag=" ~ definition.tag;
+                text = text ~ " tag=" ~ material;
             }
 
             setProperty(context, {
@@ -86,6 +106,21 @@ export const cutListDims = defineFeature(function(context is Context, id is Id, 
             });
         }
     });
+
+/** The part's Onshape material name, or "" if it has none (or it can't be read here). */
+function cutListMaterial(context is Context, body is Query) returns string
+{
+    var name = "";
+    try silent
+    {
+        const material = getProperty(context, { "entity" : body, "propertyType" : PropertyType.MATERIAL });
+        if (material != undefined && material.name != undefined)
+        {
+            name = material.name;
+        }
+    }
+    return name;
+}
 
 function cutListNumber(value is number) returns string
 {

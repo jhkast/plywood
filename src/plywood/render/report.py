@@ -5,7 +5,9 @@ from __future__ import annotations
 from collections import Counter
 from html import escape
 
-from plywood.core.models import INCH, CutStep, Layout, Result, Segment, StockKind
+from plywood.core.findlist import find_groups, with_waste
+from plywood.core.matching import nominal
+from plywood.core.models import CutStep, Layout, Result, Segment, StockKind
 from plywood.core.units import Formatter
 from plywood.render.svg import layout_svg, piece_colors, relative_width
 
@@ -32,6 +34,7 @@ ol.steps .num { flex: none; width: 22px; height: 22px; border-radius: 50%; backg
 .chip.piece, .chip.source { border-color: #7a5a2b; color: inherit; }
 .chip.leftover { color: #666; border-color: #bbb; border-style: dashed; }
 .chip.plane { background: #dfe8f3; color: #1d3550; }
+.find h4 { margin: 12px 0 2px; } .find p { margin: 0 0 4px; }
 @media print { body { margin: 0; } .sheet { margin-top: 0; } }
 """
 
@@ -65,7 +68,7 @@ def steps_html(layout: Layout, fmt: Formatter, colored: bool = False) -> str:
     colors = piece_colors(layout) if colored else {}
     if not layout.steps:
         return ""
-    whole = "Board" if layout.stock.kind == StockKind.BOARD else "Sheet"
+    whole = "Board" if layout.stock.kind.is_board else "Sheet"
     items = []
     for step in layout.steps:
         source = step.piece_label or whole
@@ -90,53 +93,114 @@ def steps_html(layout: Layout, fmt: Formatter, colored: bool = False) -> str:
     return f"<ol class='steps'>{''.join(items)}</ol>"
 
 
+def stock_label(stock, fmt: Formatter) -> str:
+    """E.g. 3/4" birch ply · 96" × 48", or 2x4 · 96" for dimensional lumber."""
+    if stock.kind == StockKind.DIMENSIONAL and (n := nominal(stock.thickness, stock.width)):
+        feet = stock.length / (12 * 25.4)
+        length = f"{round(feet)}'" if fmt.unit == "in" and abs(feet - round(feet)) < 1e-6 else fmt.length(stock.length)
+        return f"{n}{' ' + stock.tag if stock.tag else ''} · {length}"
+    return f"{fmt.thickness(stock.thickness)} {stock.tag or stock.kind} · {fmt.dims(stock.length, stock.width)}"
+
+
 def _source(stock) -> str:
-    return "on hand" if stock.on_hand else "to find" if stock.find else "buy"
+    return "on hand" if stock.on_hand else "buy"
+
+
+def spares_for(stock, settings) -> int:
+    if stock.on_hand:
+        return 0
+    return settings.spare_sheets if stock.kind == StockKind.SHEET else settings.spare_sticks
+
+
+def buy_lines(result: Result, fmt: Formatter) -> list[dict]:
+    """Stock to buy, one line per kind of stock, with the spares from Settings."""
+    counts = Counter(stock_label(lay.stock, fmt) for lay in result.purchased)
+    spares = {stock_label(lay.stock, fmt): spares_for(lay.stock, result.settings) for lay in result.purchased}
+    return [{"label": label, "count": n, "spares": spares[label]} for label, n in counts.items()]
+
+
+def find_lines(result: Result, fmt: Formatter, spares: bool = True) -> list[dict]:
+    """The hardwood shopping list: per thickness and species, totals and the blanks to find."""
+    s = result.settings
+    out = []
+    for g in find_groups(result.to_find, s, spares):
+        out.append({
+            "key": g.key,
+            "label": g.label,
+            "tag": g.tag,
+            "quarters": g.quarters,
+            "thickness": fmt.exact(g.thickness),
+            "board_feet": round(g.board_feet, 1),
+            "board_feet_total": round(with_waste(g.board_feet, s), 1),
+            "waste_pct": s.waste_pct,
+            "longest": fmt.length(g.longest),
+            "widest": fmt.length(g.widest),
+            "blanks": [
+                {
+                    "count": b.count,
+                    "spares": b.spares,
+                    "size": fmt.dims(b.length, b.width),
+                    "parts": ", ".join(f"{n} × {name}" for name, n in b.parts.most_common()),
+                    "part": next(iter(b.parts), ""),
+                }
+                for b in g.blanks
+            ],
+        })
+    return out
+
+
+def count_text(count: int, spares: int) -> str:
+    if not spares:
+        return str(count)
+    return f"{count} + {spares} spare" if count else f"{spares} spare"
+
+
+def find_html(lines: list[dict]) -> str:
+    out = []
+    for g in lines:
+        feet = f"{g['board_feet']:.1f}"
+        if g["waste_pct"]:
+            feet = f"about {g['board_feet_total']:.0f} ({feet} + {g['waste_pct']:g}%)"
+        rows = "".join(
+            f"<tr><td>{count_text(b['count'], b['spares'])}</td><td>at least {b['size']}</td><td>{escape(b['parts'])}</td></tr>"
+            for b in g["blanks"]
+        )
+        out.append(
+            f"<h4>{escape(g['label'])}</h4><p>{feet} bd ft · longest {g['longest']} · widest {g['widest']}</p>"
+            f"<table><tr><th>Pieces</th><th>Size</th><th>For</th></tr>{rows}</table>"
+        )
+    return f"<div class='find'><h3>Find (hardwood)</h3>{''.join(out)}</div>" if out else ""
 
 
 def _to_get(result: Result) -> str:
-    find = sum(1 for lay in result.layouts if lay.stock.find)
-    text = f"{len(result.purchased) - find} to buy"
-    return text + f", {find} to find" if find else text
+    text = f"{len(result.purchased)} to buy"
+    find = sum(u.count for u in result.to_find)
+    return text + f", {find} hardwood parts to find" if find else text
 
 
-def _shopping_list(result: Result, fmt: Formatter) -> str:
-    """Boards to find, per thickness and tag: what to look for at the lumberyard."""
-    groups: dict[tuple, list[Layout]] = {}
-    for lay in result.layouts:
-        if lay.stock.find:
-            groups.setdefault((lay.stock.thickness, lay.stock.tag or ""), []).append(lay)
-    if not groups:
-        return ""
-    rows = []
-    for (thick, tag), lays in sorted(groups.items()):
-        quarters = round(thick / (INCH / 4))
-        sizes = Counter((lay.stock.width, lay.stock.length) for lay in lays)
-        boards = ", ".join(f"{n} × {fmt.dims(ln, w)}" for (w, ln), n in sorted(sizes.items()))
-        board_feet = sum(lay.stock.length * lay.stock.width * lay.stock.thickness for lay in lays) / (144 * INCH**3)
-        pieces = [st.piece.w for lay in lays for st in lay.steps if st.direction == "plane"]
-        pieces += [p.rect.w for lay in lays for p in lay.placements]
-        widest = max(p.rect.h for lay in lays for p in lay.placements)
-        rows.append(
-            f"<tr><td>{quarters}/4 {escape(tag)}</td><td>{boards}</td><td>{board_feet:.1f}</td>"
-            f"<td>{fmt.length(max(pieces))}</td><td>{fmt.length(widest)}</td></tr>"
-        )
+def shopping_html(result: Result, fmt: Formatter) -> str:
+    """Stock to buy (with spares), hardwood to find, and the on-hand stock the cut list uses."""
+    buy = "".join(
+        f"<tr><td>{escape(b['label'])}</td><td>{count_text(b['count'], b['spares'])}</td></tr>"
+        for b in buy_lines(result, fmt)
+    )
+    on_hand = Counter(stock_label(lay.stock, fmt) for lay in result.layouts if lay.stock.on_hand)
+    used = "".join(f"<tr><td>{escape(label)}</td><td>{n}</td></tr>" for label, n in on_hand.items())
     return (
-        "<table class='find'><tr><th>To find</th><th>Boards</th><th>Board feet</th>"
-        "<th>Longest piece</th><th>Widest part</th></tr>" + "".join(rows) + "</table>"
+        (f"<h3>Buy</h3><table><tr><th>Stock</th><th>Count</th></tr>{buy}</table>" if buy else "")
+        + find_html(find_lines(result, fmt))
+        + (f"<h3>From stock on hand</h3><table><tr><th>Stock</th><th>Count</th></tr>{used}</table>" if used else "")
     )
 
 
-def summary_html(result: Result, fmt: Formatter, stats: bool = True) -> str:
-    rows = []
-    counts = Counter((lay.stock.name, lay.stock.thickness, _source(lay.stock)) for lay in result.layouts)
-    for (name, thick, source), n in counts.items():
-        rows.append(f"<tr><td>{escape(name)}</td><td>{fmt.thickness(thick)}</td><td>{source}</td><td>{n}</td></tr>")
-    table = (
-        "<table><tr><th>Stock</th><th>Thickness</th><th>Source</th><th>Count</th></tr>"
-        + "".join(rows)
-        + "</table>"
-    ) + _shopping_list(result, fmt)
+def shopping_count(result: Result, fmt: Formatter) -> int:
+    """Pieces to buy or find, spares included."""
+    buy = sum(b["count"] + b["spares"] for b in buy_lines(result, fmt))
+    return buy + sum(b["count"] + b["spares"] for g in find_lines(result, fmt) for b in g["blanks"])
+
+
+def summary_html(result: Result, fmt: Formatter, stats: bool = True, shopping: bool = True) -> str:
+    table = shopping_html(result, fmt) if shopping else ""
     parts_total = sum(len(lay.placements) for lay in result.layouts)
     line = (
         f"<p>{parts_total} parts on {len(result.layouts)} pieces of stock "
@@ -155,8 +219,7 @@ def sheet_title(lay: Layout, fmt: Formatter) -> str:
     st = lay.stock
     src = _source(st)
     used_as = f" as {lay.tag}" if lay.tag and not st.tag else ""
-    return (f"#{lay.number} · {st.name}{used_as} · {fmt.dims(st.length, st.width)} × "
-            f"{fmt.thickness(st.thickness)} ({src})")
+    return f"#{lay.number} · {stock_label(st, fmt)}{used_as} ({src})"
 
 
 def sheet_note(lay: Layout, fmt: Formatter) -> str:
@@ -169,7 +232,7 @@ def report_html(result: Result, fmt: Formatter, title: str = "Cut list") -> str:
     kerfs = []
     if StockKind.SHEET in kinds:
         kerfs.append(f"sheets {fmt.length(s.sheet_kerf)}")
-    if StockKind.BOARD in kinds:
+    if any(k.is_board for k in kinds):
         kerfs += [f"rips {fmt.length(s.rip_kerf)}", f"crosscuts {fmt.length(s.crosscut_kerf)}"]
         if any(lay.stock.rough for lay in result.layouts):
             kerfs.append(f"rough crosscuts {fmt.length(s.rough_crosscut_kerf)}")

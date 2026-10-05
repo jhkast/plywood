@@ -57,42 +57,50 @@ class Job:
     instances: list[Instance]
     unplaced: list[Unplaced]  # parts with no stock to come from
     settings: Settings
+    to_find: list[Unplaced]  # hardwood parts with no board for them
 
 
 def prepare(parts: list[Part], stocks: list[Stock], settings: Settings) -> Job:
     stocks = with_default_stock(parts, stocks, settings)
     unplaced: list[Unplaced] = []
+    to_find: list[Unplaced] = []
     instances: list[Instance] = []
     for part in parts:
         if part.qty <= 0:
             continue
+        missing = to_find if part.kind == StockKind.HARDWOOD else unplaced
         matches = [i for i, s in enumerate(stocks) if stock_matches(part, s, settings)]
         if not matches:
-            unplaced.append(Unplaced(part, part.qty, f"no {part.kind} stock with matching thickness/tag"))
+            missing.append(Unplaced(part, part.qty, f"no {part.kind} stock with matching thickness/tag"))
             continue
         a = settings.allowance
         rough = replace(part, length=part.length + a, width=part.width + a) if a else part
         allowed = frozenset(i for i in matches if fits_stock(rough, stocks[i], settings))
         if not allowed:
-            unplaced.append(Unplaced(part, part.qty, "too large for matching stock (check grain lock)"))
+            missing.append(Unplaced(part, part.qty, "too large for matching stock (check grain lock)"))
             continue
         tag = (part.tag or "").strip().lower() or None
         source = part if a else None
         instances.extend(Instance(rough, c + 1, allowed, tag, source) for c in range(part.qty))
-    return Job(stocks, instances, unplaced, settings)
+    return Job(stocks, instances, unplaced, settings, to_find)
 
 
 def _stock_orders(stocks: list[Stock]) -> list[list[int]]:
-    """On-hand pieces always come before purchased stock; vary the on-hand order."""
-    on_hand = [i for i, s in enumerate(stocks) if s.on_hand]
-    buy = sorted(
-        (i for i, s in enumerate(stocks) if not s.on_hand),
-        key=lambda i: -stocks[i].length * stocks[i].width,
-    )
+    """On-hand pieces always come before purchased stock; vary the order of each.
+
+    Buying smallest first matters when there's a choice of sizes (dimensional lumber):
+    packers open the first stock a part fits, so largest first would always buy a 2x12.
+    """
     area = lambda i: stocks[i].length * stocks[i].width  # noqa: E731
-    smallest_first = sorted(on_hand, key=area) + buy
-    largest_first = sorted(on_hand, key=area, reverse=True) + buy
-    return [smallest_first] if smallest_first == largest_first else [smallest_first, largest_first]
+    on_hand = [i for i, s in enumerate(stocks) if s.on_hand]
+    buy = [i for i, s in enumerate(stocks) if not s.on_hand]
+    orders = []
+    for big_buy in (True, False):
+        for big_on_hand in (False, True):
+            order = sorted(on_hand, key=area, reverse=big_on_hand) + sorted(buy, key=area, reverse=big_buy)
+            if order not in orders:
+                orders.append(order)
+    return orders
 
 
 def _candidates(
@@ -102,7 +110,7 @@ def _candidates(
 
     `instances` are all sheet parts or all board parts.
     """
-    if instances and instances[0].part.kind == StockKind.BOARD:
+    if instances and instances[0].part.kind.is_board:
         yield from _board_candidates(instances, stocks, stock_orders, settings, tries)
         return
 
@@ -184,7 +192,7 @@ def optimize(parts: list[Part], stocks: list[Stock], settings: Settings | None =
     bins: list[Bin] = []
     iterations = 0
     # Sheets and boards never share stock, so each is searched on its own.
-    for kind in (StockKind.SHEET, StockKind.BOARD):
+    for kind in StockKind:
         group = [it for it in job.instances if it.part.kind == kind]
         if not group:
             continue
@@ -196,10 +204,33 @@ def optimize(parts: list[Part], stocks: list[Stock], settings: Settings | None =
             if best_score is None or score < best_score:
                 best, best_score = packing, score
         if best is not None:
-            bins += best.bins
+            bins += _shortest(best.bins, job)
     # On-hand first, then purchased; biggest stock first within each.
     bins = sorted(bins, key=lambda b: (not b.stock.on_hand, -b.stock.length * b.stock.width, b.index))
     return finish(job, bins, iterations)
+
+
+def _shortest(bins: list[Bin], job: Job) -> list[Bin]:
+    """Buy the shortest length of each stock that still holds its layout (a 2x4 comes in 8',
+    10' and 12'; the packers only ever open the first that fits the first part)."""
+    index = {id(it): i for i, it in enumerate(job.instances)}
+    out = []
+    for b in bins:
+        st = b.stock
+        shorter = sorted(
+            (i for i, s in enumerate(job.stocks) if not s.on_hand and not st.on_hand and s.length < st.length
+             and replace(s, length=st.length) == st),
+            key=lambda i: job.stocks[i].length,
+        )
+        tree = bin_plan(b, index) if shorter else None
+        for sid in shorter:
+            try:
+                b = replay(tree, sid, job.stocks, job.settings, job.instances, b.index)
+                break
+            except PlanError:
+                continue
+        out.append(b)
+    return out
 
 
 def finish(job: Job, bins: list[Bin], iterations: int = 0, bases: list | None = None) -> Result:
@@ -212,13 +243,16 @@ def finish(job: Job, bins: list[Bin], iterations: int = 0, bases: list | None = 
     layouts = [to_layout(b, n + 1, settings) for n, b in enumerate(bins)]
     placed = {id(leaf.item) for b in bins for leaf in _leaves(b.root) if leaf.kind == "part"}
     leftover = Counter(it.final for it in job.instances if id(it) not in placed)
-    unplaced = job.unplaced + [Unplaced(p, n, "ran out of on-hand stock") for p, n in leftover.items()]
+    ran_out = [Unplaced(p, n, "ran out of on-hand stock") for p, n in leftover.items()]
+    unplaced = job.unplaced + [u for u in ran_out if u.part.kind != StockKind.HARDWOOD]
+    to_find = job.to_find + [u for u in ran_out if u.part.kind == StockKind.HARDWOOD]
     plan = []
     for n, b in enumerate(bins):
         tree = bin_plan(b, index)
         base = bases[n] if bases and bases[n] is not None else tree
         plan.append({"stock": b.stock_id, "tree": tree, "base": base})
-    return Result(layouts=layouts, unplaced=unplaced, settings=settings, stocks=job.stocks, iterations=iterations, plan=plan)
+    return Result(layouts=layouts, unplaced=unplaced, settings=settings, stocks=job.stocks, iterations=iterations,
+                  plan=plan, to_find=to_find)
 
 
 def _replay_all(job: Job, plan: list[dict]) -> list[Bin]:

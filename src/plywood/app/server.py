@@ -9,10 +9,15 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from plywood.app.api import Api
+from plywood.app.webbuild import python_zip
 
 STATIC = Path(__file__).parent / "static"
 TYPES = {".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".svg": "image/svg+xml"}
-METHODS = {"load_state", "save_state", "optimize", "choose", "import_parts", "import_stock", "convert_units", "report", "open_report"}
+METHODS = {
+    "load_state", "save_state", "optimize", "choose", "import_parts", "import_stock", "convert_units", "report",
+    "open_report", "phone_job", "import_boards",
+}
+TYPES[".webmanifest"] = "application/manifest+json"
 
 
 def make_handler(api: Api):
@@ -30,6 +35,15 @@ def make_handler(api: Api):
 
         def do_GET(self):
             name = self.path.split("?")[0].lstrip("/") or "index.html"
+            if (STATIC / name).is_dir() and not name.endswith("/"):
+                self.send_response(301)
+                self.send_header("Location", "/" + name + "/")
+                self.end_headers()
+                return
+            if name.endswith("/"):
+                name += "index.html"
+            if name == "shop/plywood.zip":  # the phone page's Python, built from this checkout
+                return self._send(200, python_zip(), "application/zip")
             path = (STATIC / name).resolve()
             if STATIC.resolve() not in path.parents or not path.is_file():
                 return self._send(404, b"not found", "text/plain")

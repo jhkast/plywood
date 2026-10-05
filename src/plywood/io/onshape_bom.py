@@ -5,8 +5,10 @@ Each cut part carries a "cut list dims" string (written into Title 1 by the
 
     762 x 590.55 x 19.05 mm sheet grain=L tag=birch
 
-i.e. `<length> x <width> x <thickness> <mm|in> <sheet|board> [grain=L|W] [tag=<text>]`.
+i.e. `<length> x <width> x <thickness> <mm|in> <sheet|dimensional|hardwood> [grain=L|W] [tag=<text>]`
+(older features wrote `board`, read as hardwood).
 The importer finds that string in whatever column holds it, so the column name doesn't matter.
+With no tag= in it, the part's material comes from the BOM's Material column, if there is one.
 Structured (multi-level) BOMs are supported: item numbers like 2.3 multiply by the parent's quantity.
 """
 
@@ -15,7 +17,7 @@ from __future__ import annotations
 import csv
 import io
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from plywood.core.models import Grain, Part, StockKind
@@ -51,8 +53,8 @@ def parse_dims(text: str) -> Dims | None:
         rest = rest[:i]
     kind, grain = StockKind.SHEET, Grain.NONE
     for word in rest.lower().split():
-        if word in ("sheet", "board"):
-            kind = StockKind(word)
+        if word in ("sheet", "board", "hardwood", "dimensional"):
+            kind = StockKind.parse(word)  # "board" (older features) = hardwood
         elif word.startswith("grain="):
             grain = Grain.parse(word.removeprefix("grain="))
     return Dims(float(m["l"]) * scale, float(m["w"]) * scale, float(m["t"]) * scale, kind, grain, tag)
@@ -101,6 +103,7 @@ def read_onshape_bom_text(text: str) -> BomImport:
     qty_col = _find(header, "quantity", "qty", "count")
     name_col = _find(header, "name", "part name", "description")
     item_col = _find(header, "item", "item number", "#")
+    material_col = _find(header, "material")
 
     def cell(row: list[str], col: int | None) -> str:
         return row[col].strip() if col is not None and col < len(row) else ""
@@ -129,6 +132,8 @@ def read_onshape_bom_text(text: str) -> BomImport:
             if item not in has_children:  # subassemblies have no dims; that's expected
                 missing.append((name, qty))
             continue
+        if dims.tag is None and cell(row, material_col):
+            dims = replace(dims, tag=cell(row, material_col))
         by_name.setdefault(name, dims)
         merged[(name, dims)] = merged.get((name, dims), 0) + qty
 

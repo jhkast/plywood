@@ -12,7 +12,7 @@ from plywood.core.units import Formatter, parse_length
 from plywood.core.validate import check
 from plywood.io.onshape_bom import looks_like_onshape_bom, read_onshape_bom
 from plywood.io.parts_csv import read_parts, read_stock, write_cutlist
-from plywood.render.report import report_html
+from plywood.render.report import report_html, stock_label
 from plywood.render.svg import layout_svg
 
 
@@ -55,8 +55,7 @@ def _optimize(args: argparse.Namespace) -> int:
     for lay in result.layouts:
         src = "on hand" if lay.stock.on_hand else "buy"
         print(
-            f"#{lay.number:<3} {lay.stock.name:<20} {fmt.dims(lay.stock.length, lay.stock.width):<16} "
-            f"{fmt.thickness(lay.stock.thickness):<8} {src:<8} {len(lay.placements):>3} parts  "
+            f"#{lay.number:<3} {stock_label(lay.stock, fmt):<36} {src:<8} {len(lay.placements):>3} parts  "
             f"waste {lay.waste_pct:5.1f}%"
         )
     print(

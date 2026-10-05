@@ -84,7 +84,7 @@ class Bin:
         self.index = index
         self.stock_id = stock_id
         self.stock = stock
-        if stock.kind == "board":
+        if stock.kind.is_board:
             self.rip_kerf, self.crosscut_kerf = settings.rip_kerf, settings.crosscut_kerf
             # Cutting a board into segments: a jig saw on rough lumber, else the miter saw.
             self.segment_kerf = settings.rough_crosscut_kerf if stock.rough else settings.crosscut_kerf
@@ -377,7 +377,7 @@ def replay(plan, sid: int, stocks: list[Stock], settings: Settings, instances: l
         if isinstance(p, dict) and "seg" in p:
             seg = p["seg"]
             inset = float(seg.get("inset", 0))
-            if b.stock.kind != "board" or not 0 <= inset < n.h:
+            if not b.stock.kind.is_board or not 0 <= inset < n.h:
                 raise PlanError("bad segment")
             mark_segment(b, n, float(seg.get("plane", 0)), bool(seg.get("jointed")), inset)
             walk(n, p["t"])
@@ -407,7 +407,7 @@ def replay(plan, sid: int, stocks: list[Stock], settings: Settings, instances: l
         if far is not None:
             walk(far, kids[1], top and direction == "V")
 
-    walk(b.root, plan, top=b.stock.kind == "board")
+    walk(b.root, plan, top=b.stock.kind.is_board)
     return b
 
 

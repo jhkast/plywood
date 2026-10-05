@@ -6,10 +6,11 @@
   <title>Plywood</title>
   <link rel="stylesheet" href="app.css">
   <script src="app.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.min.js"></script>
   <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.9/dist/cdn.min.js"></script>
 </head>
 <body>
-<div class="app" x-data="plywood()" x-cloak>
+<div class="app" x-data="plywood()" x-cloak @keydown.window="rowKeys($event)">
   <header class="bar">
     <div class="brand">Plywood</div>
     <input class="job" x-model="state.job" aria-label="Job name" spellcheck="false">
@@ -28,6 +29,7 @@
         <button @click="$refs.importParts.click()">Parts (CSV or Onshape BOM)…</button>
         <button @click="$refs.importStock.click()">Stock CSV…</button>
         <button @click="$refs.importSettings.click()">Settings…</button>
+        <button @click="boardsText = ''; dialog = 'boards'">Boards from phone…</button>
       </div>
     </div>
     <div class="menu">
@@ -38,6 +40,7 @@
         <button @click="exportTable('parts')">Parts CSV…</button>
         <button @click="exportTable('stock')">Stock CSV…</button>
         <button @click="exportSettings()">Settings…</button>
+        <button @click="openPhone()">Shopping list for phone…</button>
       </div>
     </div>
     </div>
@@ -45,10 +48,40 @@
     <input type="file" x-ref="importParts" accept=".csv,text/csv" hidden @change="importFile($event, 'parts')">
     <input type="file" x-ref="importStock" accept=".csv,text/csv" hidden @change="importFile($event, 'stock')">
     <input type="file" x-ref="importSettings" accept=".json" hidden @change="importSettings($event)">
-    <datalist id="tag-options">
-      <template x-for="t in allTags()" :key="t"><option :value="t"></option></template>
+    <datalist id="mat-sheet">
+      <template x-for="t in materials('sheet')" :key="t"><option :value="t"></option></template>
+    </datalist>
+    <datalist id="mat-dimensional">
+      <template x-for="t in materials('dimensional')" :key="t"><option :value="t"></option></template>
+    </datalist>
+    <datalist id="mat-hardwood">
+      <template x-for="t in materials('hardwood')" :key="t"><option :value="t"></option></template>
     </datalist>
   </header>
+
+  <div class="dialog-bg" x-show="dialog" x-transition.opacity @click.self="dialog = null" @keydown.escape.window="dialog = null">
+    <div class="dialog" x-show="dialog === 'phone'">
+      <h3>Shopping list for phone</h3>
+      <label>Phone page address
+        <input x-model="state.phone_url" placeholder="https://…/shop/" spellcheck="false" @input.debounce.300ms="makePhoneLink()"></label>
+      <template x-if="phone.link">
+        <div>
+          <div class="qr" x-show="phone.qr" x-html="phone.qr"></div>
+          <p class="muted" x-show="!phone.qr">Too big for a QR code: copy the link instead.</p>
+          <div class="linkrow"><input readonly :value="phone.link" @focus="$event.target.select()"><button @click="copyText(phone.link)">Copy</button></div>
+        </div>
+      </template>
+      <div class="buttons"><button @click="dialog = null">Close</button></div>
+    </div>
+    <div class="dialog" x-show="dialog === 'boards'">
+      <h3>Boards from phone</h3>
+      <textarea x-model="boardsText" rows="4" placeholder="Paste the link from the phone" spellcheck="false"></textarea>
+      <div class="buttons">
+        <button class="primary" @click="addBoards()" :disabled="!boardsText.trim()">Add to stock</button>
+        <button @click="dialog = null">Cancel</button>
+      </div>
+    </div>
+  </div>
 
   <div class="flash" x-show="flash.text" x-transition.opacity :class="flash.kind" x-text="flash.text" @click="flash.text = ''"></div>
 
@@ -56,6 +89,7 @@
     <section class="workspace">
       <nav class="tabs">
         <button :class="{on: tab === 'parts'}" @click="tab = 'parts'">Parts <span class="count" x-text="countRows('parts')"></span></button>
+        <button :class="{on: tab === 'shopping'}" @click="tab = 'shopping'">Shopping list <span class="count" x-text="result?.stats?.shop || ''"></span></button>
         <button :class="{on: tab === 'stock'}" @click="tab = 'stock'">Stock <span class="count" x-text="countRows('stock')"></span></button>
         <button :class="{on: tab === 'output'}" @click="tab = 'output'">Cut list <span class="count" x-text="result?.stats?.stock || ''"></span></button>
         <button :class="{on: tab === 'settings'}" @click="tab = 'settings'">Settings</button>
@@ -65,16 +99,25 @@
       <div class="panel" x-show="tab === 'parts'">
         <div class="tools">
           <button class="ghost" @click="clearTable('parts')">Clear</button>
+          <template x-if="sel.table === 'parts' && sel.rows.length">
+            <div class="rowbar">
+              <span class="muted" x-text="sel.rows.length + (sel.rows.length > 1 ? ' rows' : ' row')"></span>
+              <button @click="duplicateRows()" title="Ctrl+D">Duplicate</button>
+              <button @click="copyRows()" title="Ctrl+C">Copy</button>
+              <button @click="deleteRows()" title="Delete">Delete</button>
+            </div>
+          </template>
         </div>
-        <table class="grid">
-          <colgroup><col><col class="dim"><col class="dim"><col class="dim"><col class="qty"><col class="grain"><col class="sel"><col class="tag"><col class="x"></colgroup>
+        <table class="grid" @focusin="if ($event.target.tagName !== 'BUTTON') clearSel()">
+          <colgroup><col class="num"><col><col class="dim"><col class="dim"><col class="dim"><col class="qty"><col class="grain"><col class="sel"><col class="tag"><col class="x"></colgroup>
           <thead><tr>
-            <th>Name</th><th>Length</th><th>Width</th><th>Thick</th><th>Qty</th>
-            <th title="Grain lock: which part dimension runs along the stock grain">Grain</th><th>Kind</th><th>Tag</th><th></th>
+            <th></th><th>Name</th><th>Length</th><th>Width</th><th>Thick</th><th>Qty</th>
+            <th title="Grain lock: which part dimension runs along the stock grain">Grain</th><th>Kind</th><th>Material</th><th></th>
           </tr></thead>
           <tbody>
             <template x-for="(row, i) in state.parts" :key="i">
-              <tr>
+              <tr :class="{sel: isSelected('parts', i)}">
+                <td class="rownum"><button x-show="!isBlank(row)" :class="{on: isSelected('parts', i)}" @click="select($event, 'parts', i)" x-text="i + 1"></button></td>
                 <template x-for="f in ['name', 'length', 'width', 'thickness', 'qty']" :key="f">
                   <td><input x-model="row[f]" :class="cellClass('parts', i, f)" :title="cellError('parts', i, f) || row[f]"
                              :placeholder="f === 'qty' ? '1' : ''" spellcheck="false"
@@ -82,8 +125,8 @@
                              @keydown.enter.prevent="moveDown($event)"></td>
                 </template>
                 <td><select x-model="row.grain"><option value="">any</option><option value="length">L</option><option value="width">W</option></select></td>
-                <td><select x-model="row.kind"><option value="sheet">sheet</option><option value="board">board</option></select></td>
-                <td><input x-model="row.tag" list="tag-options" placeholder="any" spellcheck="false" @input="ensureBlank('parts')" @paste="paste($event, 'parts', i, 'tag')"></td>
+                <td><select x-model="row.kind"><option value="sheet">sheet</option><option value="dimensional">dimensional</option><option value="hardwood">hardwood</option></select></td>
+                <td><input x-model="row.tag" :list="'mat-' + row.kind" placeholder="any" spellcheck="false" @input="ensureBlank('parts')" @paste="paste($event, 'parts', i, 'tag')"></td>
                 <td><button class="del" x-show="!isBlank(row)" @click="removeRow('parts', i)" title="Remove row">×</button></td>
               </tr>
             </template>
@@ -92,38 +135,67 @@
       </div>
 
       <!-- Stock -->
+      <div class="panel output" x-show="tab === 'shopping'">
+        <div class="tools">
+          <button @click="openPhone()" :disabled="!result || !result.ok || !result.stats">Send to phone…</button>
+        </div>
+        <template x-if="busy"><span class="spin">Optimizing…</span></template>
+        <template x-if="!busy && result && !result.ok">
+          <div class="problems">
+            <b x-text="result.message || ('Fix ' + result.errors.length + ' highlighted cell' + (result.errors.length > 1 ? 's' : ''))"></b>
+            <button x-show="result.stale" @click="reoptimize()">Re-optimize</button>
+          </div>
+        </template>
+        <template x-if="!busy && result && result.ok && result.stats">
+          <div class="summary shopping" x-html="result.shopping || '<p class=muted>Nothing to buy or find.</p>'"></div>
+        </template>
+      </div>
+
       <div class="panel" x-show="tab === 'stock'">
         <div class="tools">
           <button class="ghost" @click="clearTable('stock')">Clear</button>
+          <template x-if="sel.table === 'stock' && sel.rows.length">
+            <div class="rowbar">
+              <span class="muted" x-text="sel.rows.length + (sel.rows.length > 1 ? ' rows' : ' row')"></span>
+              <button @click="duplicateRows()" title="Ctrl+D">Duplicate</button>
+              <button @click="copyRows()" title="Ctrl+C">Copy</button>
+              <button @click="deleteRows()" title="Delete">Delete</button>
+            </div>
+          </template>
         </div>
-        <table class="grid">
-          <colgroup><col><col class="dim"><col class="dim"><col class="dim"><col class="qty"><col class="edges"><col class="sel"><col class="rough"><col class="tag"><col class="x"></colgroup>
+        <table class="grid stock" @focusin="if ($event.target.tagName !== 'BUTTON') clearSel()">
+          <colgroup><col class="num"><col class="sel"><col class="size"><col class="dim"><col class="dim"><col class="dim"><col class="onhand"><col class="edges"><col class="rough"><col class="mat"><col class="x"></colgroup>
           <thead><tr>
-            <th>Name</th><th>Length</th><th>Width</th><th>Thick</th>
-            <th title="Pieces on hand. Blank = buy as many as needed">On hand</th><th title="Edges to trim">Trim</th><th>Kind</th>
-            <th title="Rough-sawn board: jointed and planed">Rough</th><th>Tag</th><th></th>
+            <th></th><th>Kind</th><th>Size</th><th>Length</th><th>Width</th><th>Thick</th>
+            <th title="Pieces you have. 0 = buy as many as needed">On hand</th><th title="Click an edge to trim it">Trim</th>
+            <th title="Rough-sawn hardwood: jointed and planed">Rough</th><th>Material</th><th></th>
           </tr></thead>
           <tbody>
             <template x-for="(row, i) in state.stock" :key="i">
-              <tr>
-                <template x-for="f in ['name', 'length', 'width', 'thickness', 'qty']" :key="f">
+              <tr :class="{sel: isSelected('stock', i)}">
+                <td class="rownum"><button x-show="!isBlank(row)" :class="{on: isSelected('stock', i)}" @click="select($event, 'stock', i)" x-text="i + 1"></button></td>
+                <td><select x-model="row.kind"><option value="sheet">sheet</option><option value="dimensional">dimensional</option><option value="hardwood">hardwood</option></select></td>
+                <td><select x-show="row.kind === 'dimensional'" @change="setNominal(row, $event.target.value)">
+                  <option value="" :selected="!nominalOf(row)">custom</option>
+                  <template x-for="n in dimensionalNames" :key="n"><option :value="n" x-text="n" :selected="n === nominalOf(row)"></option></template>
+                </select></td>
+                <template x-for="f in ['length', 'width', 'thickness', 'qty']" :key="f">
                   <td><input x-model="row[f]" :class="cellClass('stock', i, f)" :title="cellError('stock', i, f) || row[f]"
                              :placeholder="stockPlaceholder(row, f)" spellcheck="false"
                              @input="ensureBlank('stock')" @paste="paste($event, 'stock', i, f)"
                              @keydown.enter.prevent="moveDown($event)"></td>
                 </template>
                 <td>
-                  <svg class="edges" viewBox="0 0 40 24" x-show="!isBlank(row)">
-                    <rect x="5" y="5" width="30" height="14"/>
-                    <line x1="5" y1="3" x2="35" y2="3" :class="{on: hasEdge(row, 't')}" @click="toggleEdge(row, 't')"><title>Top</title></line>
-                    <line x1="5" y1="21" x2="35" y2="21" :class="{on: hasEdge(row, 'b')}" @click="toggleEdge(row, 'b')"><title>Bottom</title></line>
-                    <line x1="3" y1="5" x2="3" y2="19" :class="{on: hasEdge(row, 'l')}" @click="toggleEdge(row, 'l')"><title>Left end</title></line>
-                    <line x1="37" y1="5" x2="37" y2="19" :class="{on: hasEdge(row, 'r')}" @click="toggleEdge(row, 'r')"><title>Right end</title></line>
+                  <svg class="edges" viewBox="0 0 60 32">
+                    <rect x="9" y="9" width="42" height="14"/>
+                    <line x1="9" y1="4" x2="51" y2="4" :class="{on: hasEdge(row, 't')}" @click="toggleEdge(row, 't')"><title>Top</title></line>
+                    <line x1="9" y1="28" x2="51" y2="28" :class="{on: hasEdge(row, 'b')}" @click="toggleEdge(row, 'b')"><title>Bottom</title></line>
+                    <line x1="4" y1="9" x2="4" y2="23" :class="{on: hasEdge(row, 'l')}" @click="toggleEdge(row, 'l')"><title>Left end</title></line>
+                    <line x1="56" y1="9" x2="56" y2="23" :class="{on: hasEdge(row, 'r')}" @click="toggleEdge(row, 'r')"><title>Right end</title></line>
                   </svg>
                 </td>
-                <td><select x-model="row.kind"><option value="sheet">sheet</option><option value="board">board</option></select></td>
-                <td class="center"><input type="checkbox" x-show="row.kind === 'board'" x-model="row.rough"></td>
-                <td><input x-model="row.tag" list="tag-options" placeholder="any" spellcheck="false" @input="ensureBlank('stock')" @paste="paste($event, 'stock', i, 'tag')"></td>
+                <td class="center"><input type="checkbox" x-show="row.kind === 'hardwood'" x-model="row.rough"></td>
+                <td><input x-model="row.tag" :list="'mat-' + row.kind" placeholder="any" spellcheck="false" @input="ensureBlank('stock')" @paste="paste($event, 'stock', i, 'tag')"></td>
                 <td><button class="del" x-show="!isBlank(row)" @click="removeRow('stock', i)" title="Remove row">×</button></td>
               </tr>
             </template>
@@ -132,9 +204,9 @@
 
         <template x-if="tagInfo().length">
           <div class="tagtable">
-            <h4>Tags in use</h4>
+            <h4>Materials in use</h4>
             <table>
-              <tr><th>Tag</th><th>Sheet parts</th><th>Board parts</th><th>Sheet stock</th><th>Board stock</th><th></th><th>Same as…</th></tr>
+              <tr><th>Material</th><th>Sheet parts</th><th>Lumber parts</th><th>Sheet stock</th><th>Lumber stock</th><th></th><th>Same as…</th></tr>
               <template x-for="t in tagInfo()" :key="t.tag">
                 <tr>
                   <td><b x-text="t.tag"></b></td>
@@ -159,7 +231,7 @@
 
         <template x-if="Object.keys(state.tag_aliases || {}).length || (state.tag_distinct || []).length">
           <div class="tagtable">
-            <h4>Remembered tag decisions</h4>
+            <h4>Remembered material decisions</h4>
             <ul class="decisions">
               <template x-for="[from, to] in Object.entries(state.tag_aliases)" :key="from">
                 <li><b x-text="from"></b> → <b x-text="to"></b> <button class="del" title="Forget" @click="forgetAlias(from)">×</button></li>
@@ -175,11 +247,15 @@
       <!-- Settings -->
       <div class="panel settings" x-show="tab === 'settings'">
         <h4>Kerf</h4>
-        <template x-for="[f, label, note] in [['sheet_kerf', 'Sheets', 'track or table saw'], ['rip_kerf', 'Board rips', 'table saw'],
-                                              ['crosscut_kerf', 'Board crosscuts', 'miter saw'], ['rough_crosscut_kerf', 'Rough boards into segments', 'jig saw']]" :key="f">
+        <template x-for="[f, label, note] in [['track_saw_kerf', 'Track saw', state.settings.sheet_saw === 'table' ? '' : 'sheets'],
+                                              ['table_saw_kerf', 'Table saw', state.settings.sheet_saw === 'table' ? 'sheets, board rips' : 'board rips'],
+                                              ['miter_saw_kerf', 'Miter saw', 'board crosscuts'], ['jig_saw_kerf', 'Jig saw', 'rough boards into segments']]" :key="f">
           <label><span><span x-text="label"></span> <span class="note" x-text="note"></span></span>
             <input x-model="state.settings[f]" :class="cellClass('settings', 0, f)"></label>
         </template>
+        <label>Sheets cut with
+          <select x-model="state.settings.sheet_saw"><option value="track">Track saw</option><option value="table">Table saw</option></select>
+        </label>
         <h4>Allowances</h4>
         <label><span>Edge trim <span class="note">each trimmed edge</span></span>
           <input x-model="state.settings.edge_trim" :class="cellClass('settings', 0, 'edge_trim')"></label>
@@ -191,11 +267,16 @@
           <label><span><span x-text="label"></span> <span class="note" x-text="note"></span></span>
             <input x-model="state.settings[f]" :class="cellClass('settings', 0, f)"></label>
         </template>
-        <label class="check"><input type="checkbox" x-model="state.settings.default_boards"> Assume boards to find when no stock matches</label>
-        <label>Typical board to find
-          <span class="pair"><input x-model="state.settings.board_width" :class="cellClass('settings', 0, 'board_width')" title="Width">
-          × <input x-model="state.settings.board_length" :class="cellClass('settings', 0, 'board_length')" title="Length"></span>
-        </label>
+        <label><span>Dimensional lengths <span class="note">you can buy</span></span>
+          <input x-model="state.settings.dimensional_lengths" :class="cellClass('settings', 0, 'dimensional_lengths')"></label>
+        <label class="check"><input type="checkbox" x-model="state.settings.default_dimensional"> Assume standard dimensional lumber when no stock matches</label>
+        <h4>Extra</h4>
+        <template x-for="[f, label, note] in [['spare_sheets', 'Spare sheets', 'per kind of sheet'], ['spare_sticks', 'Spare sticks', 'per dimensional size'],
+                                              ['spare_pct', 'Spare hardwood pieces %', 'per group of identical pieces, rounded up'],
+                                              ['waste_pct', 'Extra board feet %', 'hardwood estimate: knots, checks, odd widths']]" :key="f">
+          <label><span><span x-text="label"></span> <span class="note" x-text="note"></span></span>
+            <input x-model="state.settings[f]" :class="cellClass('settings', 0, f)" inputmode="decimal"></label>
+        </template>
         <h4>General</h4>
         <label class="check"><input type="checkbox" x-model="state.settings.default_sheets"> Assume 4×8 sheets when no stock matches</label>
         <label>Fraction precision
