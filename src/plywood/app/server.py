@@ -15,7 +15,7 @@ STATIC = Path(__file__).parent / "static"
 TYPES = {".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".svg": "image/svg+xml"}
 METHODS = {
     "load_state", "save_state", "optimize", "choose", "import_parts", "import_stock", "convert_units", "report",
-    "open_report", "phone_job", "import_boards",
+    "open_report", "phone_job", "import_boards", "set_unsaved", "quit",
 }
 TYPES[".webmanifest"] = "application/manifest+json"
 

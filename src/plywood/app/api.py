@@ -10,6 +10,7 @@ import hashlib
 import json
 import os
 import tempfile
+import threading
 import webbrowser
 from dataclasses import asdict
 from pathlib import Path
@@ -83,6 +84,8 @@ def default_state() -> dict:
         "tag_distinct": [],  # "a | b" pairs the user said are different materials
         "result": None,  # {"key": inputs_key(...), "sheets": Result.plan}: the cut list shown last
         "phone_url": PHONE_URL,  # where the phone shopping list page is hosted
+        "skipped": [],  # BOM rows the last parts import couldn't read (no cut list dims)
+        "saved_hash": None,  # the job as last saved to a file (see jobHash in app.js)
     }
 
 
@@ -315,6 +318,8 @@ class Api:
     def __init__(self, state_file: Path | None = None):
         self._state_file = state_file or state_path()
         self._window = None  # set by the desktop launcher for native file dialogs
+        self.unsaved: str | None = None  # the open job's name while it has changes not saved to a file
+        self.quitting = False
 
     # ------------------------------------------------------------ state
 
@@ -518,6 +523,32 @@ class Api:
         path.write_text(rep["html"], encoding="utf-8")
         webbrowser.open(path.as_uri())
         return {"ok": True, "path": str(path)}
+
+    def set_unsaved(self, unsaved: bool, job: str = "") -> bool:
+        self.unsaved = (job or "Untitled") if unsaved else None
+        return True
+
+    def quit(self) -> bool:
+        """Close the desktop window without asking again (after saving from its closing question)."""
+        if self._window is not None:
+            self.quitting = True
+            threading.Timer(0.3, self._window.destroy).start()  # after this reply has gone out
+        return True
+
+    def open_text(self) -> dict:
+        """Native open dialog for a job file (desktop window only)."""
+        if self._window is None:
+            return {"ok": False, "message": "no native window"}
+        import webview
+
+        result = self._window.create_file_dialog(webview.FileDialog.OPEN, file_types=("Plywood job (*.json)", "All files (*.*)"))
+        if not result:
+            return {"ok": False, "cancelled": True}
+        path = Path(result if isinstance(result, str) else result[0])
+        try:
+            return {"ok": True, "name": path.name, "text": path.read_text(encoding="utf-8-sig")}
+        except OSError as e:
+            return {"ok": False, "message": f"couldn't read {path.name}: {e}"}
 
     def save_text(self, filename: str, text: str) -> dict:
         """Native save dialog (desktop window only)."""

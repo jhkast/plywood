@@ -20,7 +20,7 @@
       <button :class="{on: state.units === 'mm'}" @click="changeUnits('mm')">mm</button>
     </div>
     <button @click="newJob()">New</button>
-    <button @click="$refs.openJob.click()">Open…</button>
+    <button @click="open()">Open…</button>
     <button @click="saveJob()">Save…</button>
     <div class="menus" @click.outside="menu = null" @keydown.escape.window="menu = null">
     <div class="menu">
@@ -59,7 +59,15 @@
     </datalist>
   </header>
 
-  <div class="dialog-bg" x-show="dialog" x-transition.opacity @click.self="dialog = null" @keydown.escape.window="dialog = null">
+  <div class="dialog-bg" x-show="dialog" x-transition.opacity @click.self="closeDialog()" @keydown.escape.window="closeDialog()">
+    <div class="dialog" x-show="dialog === 'ask'">
+      <h3 x-text="question.title"></h3>
+      <div class="buttons">
+        <template x-for="[value, label, primary] in question.buttons" :key="value">
+          <button :class="{primary}" @click="answer(value)" x-text="label"></button>
+        </template>
+      </div>
+    </div>
     <div class="dialog" x-show="dialog === 'phone'">
       <h3>Shopping list for phone</h3>
       <label>Phone page address
@@ -97,6 +105,10 @@
 
       <!-- Parts -->
       <div class="panel" x-show="tab === 'parts'">
+        <div class="tagwarn" x-show="(state.skipped || []).length">
+          <span><b>Not imported, no cut list dims in Onshape:</b> <span x-text="(state.skipped || []).join(', ')"></span></span>
+          <button class="del" title="Dismiss" @click="state.skipped = []">×</button>
+        </div>
         <div class="tools">
           <button class="ghost" @click="clearTable('parts')">Clear</button>
           <template x-if="sel.table === 'parts' && sel.rows.length">

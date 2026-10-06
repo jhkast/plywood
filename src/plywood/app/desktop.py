@@ -67,6 +67,33 @@ def _remember_geometry(window, maximized: list[bool], normal: dict) -> None:
         pass
 
 
+def _save_question(window, job: str) -> str:
+    """'save', 'discard' or 'cancel'. Runs on the window's own thread while it's closing."""
+    text = f"Save changes to {job}?"
+    try:  # Windows: a real Save / Don't Save / Cancel box
+        import System.Windows.Forms as WF
+        from webview.platforms.winforms import BrowserView
+
+        r = WF.MessageBox.Show(BrowserView.instances.get(window.uid), text, "Plywood",
+                               WF.MessageBoxButtons.YesNoCancel, WF.MessageBoxIcon.Warning)
+        return "save" if r == WF.DialogResult.Yes else "discard" if r == WF.DialogResult.No else "cancel"
+    except Exception:
+        return "discard" if window.create_confirmation_dialog("Plywood", f"Close without saving {job}?") else "cancel"
+
+
+def _ask_to_save(window, api: Api) -> bool:
+    """Closing handler: False keeps the window open."""
+    if api.unsaved is None or api.quitting:
+        return True
+    choice = _save_question(window, api.unsaved)
+    if choice == "save":
+        # The save dialog can't open while the window is mid-close: keep it open, save from the
+        # page, and the page closes the window (Api.quit) once the file is written.
+        threading.Thread(target=lambda: window.evaluate_js("window.plywoodApp.saveAndClose()"), daemon=True).start()
+        return False
+    return choice == "discard"
+
+
 def main(argv: list[str] | None = None) -> None:
     ap = argparse.ArgumentParser(prog="plywood-app")
     ap.add_argument("--browser", action="store_true", help="open in the default browser instead of a window")
@@ -108,6 +135,7 @@ def main(argv: list[str] | None = None) -> None:
             window.events.resized += on_resized_or_moved
             window.events.moved += on_resized_or_moved
             window.events.closing += lambda *a: _remember_geometry(window, maximized, normal)
+            window.events.closing += lambda *a: _ask_to_save(window, api)
             shown = threading.Event()
             window.events.shown += shown.set
             webview.start()

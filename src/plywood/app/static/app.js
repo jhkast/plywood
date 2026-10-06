@@ -136,9 +136,13 @@ function plywood() {
     seq: 0,
     keepNext: false,
     menu: null, // open top-row menu: 'import' | 'export'
+    savedHash: null, // jobHash() when the job was last saved to or opened from a file
+    unsaved: null,
+    unsavedName: '',
     sel: { table: null, rows: [], anchor: 0 }, // rows picked by their row number
     dimensionalNames: Object.keys(DIMENSIONAL),
-    dialog: null, // 'phone' | 'boards'
+    dialog: null, // 'phone' | 'boards' | 'ask'
+    question: { title: '', buttons: [] }, // for dialog 'ask'
     phone: { code: '', link: '', qr: '' },
     boardsText: '',
     timers: {},
@@ -153,14 +157,22 @@ function plywood() {
       this.state = await api('load_state');
       this.plan = this.state.result;
       delete this.state.result; // kept apart so a new plan doesn't count as an edit
+      this.savedHash = this.state.saved_hash ?? null;
+      delete this.state.saved_hash;
       this.state.settings.priority ||= 'waste';
       this.state.tag_aliases ||= {};
       this.state.tag_distinct ||= [];
       this.ensureBlank('parts');
       this.ensureBlank('stock');
+      this.savedHash ??= this.jobHash(); // older state: what's there counts as saved
+      window.plywoodApp = this; // for the desktop window's "save before closing?"
+      window.addEventListener('beforeunload', (e) => {
+        if (!window.pywebview && this.unsaved) e.preventDefault(); // browser tab; the desktop window asks itself
+      });
       let first = true;
       Alpine.effect(() => {
         JSON.stringify(this.state); // track every cell
+        queueMicrotask(() => this.trackUnsaved()); // outside the effect: the cut list isn't an edit
         if (first) { first = false; return; }
         this.schedule();
       });
@@ -366,6 +378,7 @@ function plywood() {
       const n = this.countRows(table);
       if (n && !confirm(`Remove all ${n} ${table === 'parts' ? 'parts' : 'stock rows'}?`)) return;
       this.state[table] = [newRow(table)];
+      if (table === 'parts') this.state.skipped = [];
     },
     moveDown(e) {
       const td = e.target.closest('td');
@@ -411,7 +424,46 @@ function plywood() {
       this.timers.save = setTimeout(() => this.save(), 800);
     },
     withPlan() {
-      return { ...this.state, result: this.plan };
+      return { ...this.state, result: this.plan, saved_hash: this.savedHash };
+    },
+
+    // ---------------------------------------------------------------- unsaved changes
+
+    jobFile() {
+      return {
+        plywood_job: 1,
+        job: this.state.job,
+        units: this.state.units,
+        denominator: this.state.denominator,
+        settings: this.state.settings,
+        parts: this.state.parts.filter((r) => !isBlank(r)),
+        stock: this.state.stock.filter((r) => !isBlank(r)),
+        result: this.plan,
+      };
+    },
+    // What a job file would hold, minus the cut list's fingerprint (it changes on reopen).
+    jobHash() {
+      const text = JSON.stringify({ ...this.jobFile(), result: this.plan?.sheets ?? null });
+      let h = 2166136261;
+      for (let i = 0; i < text.length; i++) h = Math.imul(h ^ text.charCodeAt(i), 16777619);
+      return (h >>> 0).toString(36);
+    },
+    markSaved() {
+      this.savedHash = this.jobHash();
+      this.trackUnsaved();
+      this.save(); // so a relaunch knows it was saved
+    },
+    // Tells the desktop window whether closing should ask to save. Empty jobs never ask.
+    trackUnsaved() {
+      const unsaved = !!(this.countRows('parts') || this.countRows('stock')) && this.jobHash() !== this.savedHash;
+      if (unsaved === this.unsaved && this.state.job === this.unsavedName) return;
+      this.unsaved = unsaved;
+      this.unsavedName = this.state.job;
+      api('set_unsaved', unsaved, this.state.job || 'Untitled').catch(() => {});
+    },
+    // Called by the desktop window after "Save" in its closing question.
+    async saveAndClose() {
+      if (await this.saveJob()) api('quit');
     },
     save() {
       clearTimeout(this.timers.save);
@@ -431,6 +483,7 @@ function plywood() {
       if (r.plan && JSON.stringify(r.plan) !== JSON.stringify(this.plan)) {
         this.plan = r.plan;
         this.save();
+        this.trackUnsaved();
       }
     },
     // `keepNext`: the next run shows the saved cut list as it is (after opening a file or
@@ -468,13 +521,14 @@ function plywood() {
         const r = await window.pywebview.api.save_text(name, text);
         if (r.ok) this.say('Saved ' + r.path);
         else if (!r.cancelled) this.say(r.message, 'error');
-        return;
+        return r.ok;
       }
       const a = document.createElement('a');
       a.href = URL.createObjectURL(new Blob([text], { type: mime }));
       a.download = name;
       a.click();
       URL.revokeObjectURL(a.href);
+      return true;
     },
     fileBase() {
       return (this.state.job || 'cut list').replace(/[\\/:*?"<>|]+/g, '-').trim();
@@ -487,7 +541,15 @@ function plywood() {
       const r = await api(table === 'parts' ? 'import_parts' : 'import_stock', text, this.state.units, this.state.denominator);
       if (!r.ok) return this.say(`Couldn't import ${file.name}: ${r.message}`, 'error');
       const existing = this.state[table].filter((row) => !isBlank(row));
-      const replace = !existing.length || confirm(`Replace the ${existing.length} rows already in the table?\n\nOK = replace, Cancel = add to them`);
+      let replace = true;
+      if (existing.length) {
+        const n = existing.length;
+        const noun = table === 'parts' ? (n === 1 ? 'part' : 'parts') : (n === 1 ? 'stock row' : 'stock rows');
+        const choice = await this.ask(`The table already has ${n} ${noun}.`,
+          [['replace', 'Replace', true], ['add', 'Add'], ['cancel', 'Cancel']]);
+        if (choice === 'cancel') return;
+        replace = choice === 'replace';
+      }
       for (const row of r.rows) if (row.tag) row.tag = this.resolveTag(row.tag);
       this.state[table] = [...(replace ? [] : existing), ...r.rows];
       this.ensureBlank(table);
@@ -496,39 +558,73 @@ function plywood() {
       }
       let msg = `Imported ${r.rows.length} ${table === 'parts' ? 'parts' : 'stock rows'}`;
       if (r.source === 'onshape') msg += ' from Onshape BOM';
-      if (r.skipped?.length) msg += `. Skipped (no cut list dims): ${r.skipped.join(', ')}`;
-      this.say(msg, r.skipped?.length ? 'warn' : 'info');
+      if (table === 'parts') { // kept on the Parts tab until dismissed
+        const before = replace ? [] : this.state.skipped || [];
+        this.state.skipped = [...new Set([...before, ...(r.skipped || [])])];
+      }
+      this.say(msg);
     },
     async changeUnits(to) {
       if (to === this.state.units) return;
       this.state = await api('convert_units', JSON.parse(JSON.stringify(this.state)), to);
     },
-    newJob() {
-      if ((this.countRows('parts') || this.countRows('stock')) && !confirm('Start a new job? Parts and stock will be cleared.')) return;
+    // A question with buttons ([value, label, primary?]); resolves to the value clicked, or
+    // 'cancel' for Esc or a click outside.
+    ask(title, buttons) {
+      this.question = { title, buttons };
+      this.dialog = 'ask';
+      return new Promise((resolve) => (this.answerWith = resolve));
+    },
+    answer(value) {
+      this.dialog = null;
+      this.answerWith?.(value);
+      this.answerWith = null;
+    },
+    closeDialog() {
+      if (this.dialog === 'ask') this.answer('cancel');
+      else this.dialog = null;
+    },
+    // Before New or Open replaces the job: offer to save it if it has unsaved changes.
+    async readyToLeave() {
+      if (!this.unsaved) return true;
+      const choice = await this.ask(`Save changes to ${this.state.job || 'Untitled'}?`,
+        [['save', 'Save', true], ['discard', "Don't save"], ['cancel', 'Cancel']]);
+      if (choice === 'save') return this.saveJob();
+      return choice === 'discard';
+    },
+    async newJob() {
+      if (!(await this.readyToLeave())) return;
       this.state.job = 'Untitled';
       this.state.parts = [newRow('parts')];
       this.state.stock = [newRow('stock')];
+      this.state.skipped = [];
+      this.markSaved();
     },
     async saveJob() {
-      const job = {
-        plywood_job: 1,
-        job: this.state.job,
-        units: this.state.units,
-        denominator: this.state.denominator,
-        settings: this.state.settings,
-        parts: this.state.parts.filter((r) => !isBlank(r)),
-        stock: this.state.stock.filter((r) => !isBlank(r)),
-        result: this.plan,
-      };
-      await this.saveText(this.fileBase() + '.json', JSON.stringify(job, null, 1), 'application/json');
+      const ok = await this.saveText(this.fileBase() + '.json', JSON.stringify(this.jobFile(), null, 1), 'application/json');
+      if (ok) this.markSaved();
+      return ok;
+    },
+    async open() {
+      if (!(await this.readyToLeave())) return;
+      if (window.pywebview?.api?.open_text) { // native dialog: no need for a fresh click after saving
+        const r = await window.pywebview.api.open_text();
+        if (r.ok) this.loadJob(r.name, r.text);
+        else if (!r.cancelled) this.say(r.message, 'error');
+        return;
+      }
+      this.$refs.openJob.click();
     },
     async openJob(e) {
       const file = e.target.files[0];
       e.target.value = '';
-      if (!file) return;
+      if (file) this.loadJob(file.name, await file.text());
+    },
+    async loadJob(name, text) {
+      const file = { name };
       let job;
       try {
-        job = JSON.parse(await file.text());
+        job = JSON.parse(text);
         if (!Array.isArray(job.parts)) throw new Error('no parts list');
       } catch (err) {
         return this.say(`${file.name} isn't a Plywood job: ${err.message}`, 'error');
@@ -547,6 +643,7 @@ function plywood() {
       this.keepNext = true; // shown exactly as saved
       this.ensureBlank('parts');
       this.ensureBlank('stock');
+      this.markSaved();
       this.say('Opened ' + file.name);
     },
     // ---------------------------------------------------------------- export / import one tab
