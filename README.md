@@ -2,6 +2,8 @@
 
 Cut list optimizer for sheet goods and lumber, built for table saw, track saw and miter saw work. Every cut is a guillotine cut, and each sheet comes with a cut order you can follow.
 
+A personal project, shared as is under the [MIT license](LICENSE): no support, and no promise of updates.
+
 ## App
 
 Open [app.py](app.py) in VS Code and press ▶, or pick **Plywood app** in Run and Debug.
@@ -69,7 +71,7 @@ The page is static files, and the optimizer runs in the phone's browser (Pyodide
 uv run python -m plywood.app.webbuild
 ```
 
-Put `dist/web` on any static host (Netlify, Cloudflare Pages, or GitHub Pages from a public repo), and paste the address of its `shop/` page into the app's QR dialog once.
+Every push to `main` builds it and publishes it to GitHub Pages ([.github/workflows/pages.yml](.github/workflows/pages.yml)), at https://jhkast.github.io/plywood/shop/, which the app uses by default. To host it elsewhere, put `dist/web` on any static host and paste the address of its `shop/` page into the app's QR dialog.
 
 ## Tests
 

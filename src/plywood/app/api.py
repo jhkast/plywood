@@ -41,6 +41,7 @@ DROPPED = ("time_budget", "board_width", "board_length", "default_boards")
 # Extras: shopping list only, so they never change (or re-run) the layout.
 EXTRAS = {"spare_sheets": 0, "spare_sticks": 1, "spare_pct": 10, "waste_pct": 25}
 DIMENSIONAL_LENGTHS = "8', 10', 12'"
+PHONE_URL = "https://jhkast.github.io/plywood/shop/"  # published by .github/workflows/pages.yml
 # Kerf per saw, with defaults in inches. Sheets go on the track saw or the table saw
 # (`sheet_saw`); board rips on the table saw, crosscuts on the miter saw, and rough boards are
 # cut into segments with the jig saw.
@@ -81,7 +82,7 @@ def default_state() -> dict:
         "tag_aliases": {},  # misspelling -> tag, applied to every import and optimize
         "tag_distinct": [],  # "a | b" pairs the user said are different materials
         "result": None,  # {"key": inputs_key(...), "sheets": Result.plan}: the cut list shown last
-        "phone_url": "",  # where the phone shopping list page is hosted
+        "phone_url": PHONE_URL,  # where the phone shopping list page is hosted
     }
 
 
@@ -325,6 +326,7 @@ class Api:
             old = saved.get("settings", {})
             state["settings"] = {**default_state()["settings"], **old}
             state["settings"] = migrate_settings(state["settings"], old)
+            state["phone_url"] = state.get("phone_url") or PHONE_URL
             for k in DROPPED:
                 state["settings"].pop(k, None)
             for row in [*state["parts"], *state["stock"]]:  # "board" became hardwood
