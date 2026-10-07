@@ -23,7 +23,7 @@ def job_from(state, tmp_path):
 
 
 def test_code_round_trip_and_links():
-    data = {"v": 2, "job": "Table ½", "boards": [{"length": "8'", "width": "7"}]}
+    data = {"v": 3, "job": "Table ½", "boards": [{"length": "8'", "width": "7"}]}
     code = shop.encode(data)
     assert set(code) <= set("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_")
     assert shop.decode(code) == data
@@ -42,7 +42,7 @@ def test_payload_has_board_parts_only_and_the_shopping_list(tmp_path):
     assert job["buy"] == [{"label": '3/4" birch ply · 96" × 48"', "count": 1, "spares": 0}]
     assert [g["label"] for g in job["find"]] == ["4/4 cherry", "8/4 cherry"]
     legs = next(g for g in job["find"] if g["label"] == "8/4 cherry")
-    assert legs["blanks"] == [{"count": 4, "spares": 1, "size": '37-1/4" × 1-9/16"', "parts": "4 × leg", "part": "leg"}]
+    assert legs["blanks"] == [{"count": 1, "size": '95-1/2" × 4"', "parts": "4 × leg, 1 × leg (spare)", "spares": {"leg": 1}}]
 
 
 def test_replan_with_empty_cart_matches_the_desktop(tmp_path):

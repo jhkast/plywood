@@ -198,7 +198,7 @@ def test_trim_only_when_edges_are_chosen():
 def test_oversize_packs_rough_sizes_and_keeps_final_labels():
     exact = fast(sheet_kerf=0)
     assert len(optimize([part("q", 24, 24, qty=8)], [sheet()], exact).layouts) == 1
-    rough = fast(sheet_kerf=0, allowance=0.5 * IN)
+    rough = fast(sheet_kerf=0, sheet_allowance=0.5 * IN)
     r = optimize([part("q", 24, 24, qty=8)], [sheet()], rough)
     assert len(r.layouts) == 3 and check(r) == []  # 24-1/2" squares: 3 per sheet
     p = r.layouts[0].placements[0]

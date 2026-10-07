@@ -32,8 +32,8 @@ def check(result: Result) -> list[str]:
             where = f"sheet {lay.number} {p.label}"
             if r.x < lo_x - EPS or r.y < lo_y - EPS or r.x + r.w > hi_x + EPS or r.y + r.h > hi_y + EPS:
                 problems.append(f"{where}: outside usable area")
-            a = s.allowance
-            want = (p.part.width + a, p.part.length + a) if p.rotated else (p.part.length + a, p.part.width + a)
+            al, aw = s.allowance(p.part.kind)
+            want = (p.part.width + aw, p.part.length + al) if p.rotated else (p.part.length + al, p.part.width + aw)
             if abs(r.w - want[0]) > EPS or abs(r.h - want[1]) > EPS:
                 problems.append(f"{where}: size mismatch")
             if p.part.grain == Grain.LENGTH and p.rotated:

@@ -135,18 +135,25 @@ def find_lines(result: Result, fmt: Formatter, spares: bool = True) -> list[dict
             "waste_pct": s.waste_pct,
             "longest": fmt.length(g.longest),
             "widest": fmt.length(g.widest),
+            "spare_of": g.spare_of,
             "blanks": [
                 {
-                    "count": b.count,
-                    "spares": b.spares,
-                    "size": fmt.dims(b.length, b.width),
-                    "parts": ", ".join(f"{n} × {name}" for name, n in b.parts.most_common()),
-                    "part": next(iter(b.parts), ""),
+                    "count": p.count,
+                    "size": fmt.dims(p.length(s), p.full_width(s)),
+                    "parts": _for_text(p),
+                    "spares": dict(p.spares),  # the phone needs these found too
                 }
-                for b in g.blanks
+                for p in g.pieces
             ],
         })
     return out
+
+
+def _for_text(piece) -> str:
+    """'2 × Short Ledger, 1 × Long Ledger (spare)': every part in one piece."""
+    parts = [f"{n} × {name}" for name, n in piece.parts.most_common()]
+    parts += [f"{n} × {name} (spare)" for name, n in piece.spares.most_common()]
+    return ", ".join(parts)
 
 
 def count_text(count: int, spares: int) -> str:
@@ -162,7 +169,7 @@ def find_html(lines: list[dict]) -> str:
         if g["waste_pct"]:
             feet = f"about {g['board_feet_total']:.0f} ({feet} + {g['waste_pct']:g}%)"
         rows = "".join(
-            f"<tr><td>{count_text(b['count'], b['spares'])}</td><td>at least {b['size']}</td><td>{escape(b['parts'])}</td></tr>"
+            f"<tr><td>{b['count']}</td><td>at least {b['size']}</td><td>{escape(b['parts'])}</td></tr>"
             for b in g["blanks"]
         )
         out.append(
@@ -196,7 +203,7 @@ def shopping_html(result: Result, fmt: Formatter) -> str:
 def shopping_count(result: Result, fmt: Formatter) -> int:
     """Pieces to buy or find, spares included."""
     buy = sum(b["count"] + b["spares"] for b in buy_lines(result, fmt))
-    return buy + sum(b["count"] + b["spares"] for g in find_lines(result, fmt) for b in g["blanks"])
+    return buy + sum(b["count"] for g in find_lines(result, fmt) for b in g["blanks"])
 
 
 def summary_html(result: Result, fmt: Formatter, stats: bool = True, shopping: bool = True) -> str:
@@ -237,8 +244,12 @@ def report_html(result: Result, fmt: Formatter, title: str = "Cut list") -> str:
         if any(lay.stock.rough for lay in result.layouts):
             kerfs.append(f"rough crosscuts {fmt.length(s.rough_crosscut_kerf)}")
     settings_line = f"Kerf: {', '.join(kerfs) or fmt.length(s.sheet_kerf)} · edge trim {fmt.length(s.edge_trim)}"
-    if s.allowance:
-        settings_line += f" · oversize {fmt.length(s.allowance)}"
+    for kind in sorted({lay.stock.kind for lay in result.layouts} | {u.part.kind for u in result.to_find}):
+        al, aw = s.allowance(kind)
+        if al == aw and al:
+            settings_line += f" · {kind} oversize {fmt.length(al)}"
+        elif al or aw:
+            settings_line += f" · {kind} oversize {fmt.length(al)} on length, {fmt.length(aw)} on width"
     sheets = [
         f"<section class='sheet'><h2>{escape(sheet_title(lay, fmt))}</h2>"
         f"<p class='muted'>{escape(sheet_note(lay, fmt))}</p>"

@@ -142,15 +142,21 @@ button.del:hover { color: var(--bad); }
 
 code { font-size: 12px; background: var(--bg); padding: 1px 4px; border-radius: 3px; }
 
-.settings { display: grid; gap: 14px; max-width: 360px; align-content: start; }
-.settings label { display: grid; gap: 4px; font-weight: 600; font-size: 13px; }
-.settings label.check { display: flex; gap: 8px; align-items: center; font-weight: 400; }
-.settings h4 { margin: 10px 0 -4px; font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
-.settings .pair { display: flex; gap: 6px; align-items: center; font-weight: 400; }
-.settings .note { font-weight: 400; color: var(--muted); }
-.settings .pair input { width: 0; flex: 1; }
+.settings { columns: 320px; column-gap: 14px; max-width: 1200px; }
+.settings section { border: 1px solid var(--line); border-radius: 8px; padding: 10px 14px 6px; margin-bottom: 14px; break-inside: avoid; }
+.settings h4 { margin: 0 0 4px; font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+.settings label.row { display: grid; grid-template-columns: 1fr 110px; gap: 12px; align-items: center; padding: 6px 0; border-top: 1px solid var(--line); font-size: 13px; }
+.settings h4 + label.row, .settings h4 + template + label.row { border-top: 0; }
+.settings label.row.wide { grid-template-columns: 1fr 1fr; }
+.settings label.check { display: flex; gap: 8px; align-items: center; padding: 6px 0; border-top: 1px solid var(--line); font-size: 13px; }
+.settings .note { display: block; font-size: 12px; color: var(--muted); }
+.tip { position: fixed; z-index: 40; max-width: 280px; padding: 6px 10px; border-radius: 6px; font-size: 12.5px;
+  background: var(--text); color: var(--bg); box-shadow: 0 4px 14px rgba(0,0,0,.25); }
+.settings .info { display: inline-grid; place-items: center; width: 14px; height: 14px; margin-left: 5px; border: 1px solid var(--muted);
+  border-radius: 50%; font: italic 600 10px/1 Georgia, serif; color: var(--muted); vertical-align: 1px; cursor: help; }
+.settings label.row.wide .note { display: inline; margin-left: 6px; }
 .settings input:not([type]), .settings select {
-  border: 1px solid var(--line); background: var(--input); border-radius: 6px; padding: 5px 8px; font-weight: 400;
+  border: 1px solid var(--line); background: var(--input); border-radius: 6px; padding: 5px 8px; width: 100%;
 }
 .settings input.bad { border-color: var(--bad); background: var(--bad-bg); }
 

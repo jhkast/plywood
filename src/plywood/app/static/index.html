@@ -106,7 +106,7 @@
       <!-- Parts -->
       <div class="panel" x-show="tab === 'parts'">
         <div class="tagwarn" x-show="(state.skipped || []).length">
-          <span><b>Not imported, no cut list dims in Onshape:</b> <span x-text="(state.skipped || []).join(', ')"></span></span>
+          <span><b>Not imported (no cut list dims in Onshape):</b> <span x-text="(state.skipped || []).join(', ')"></span></span>
           <button class="del" title="Dismiss" @click="state.skipped = []">×</button>
         </div>
         <div class="tools">
@@ -124,7 +124,7 @@
           <colgroup><col class="num"><col><col class="dim"><col class="dim"><col class="dim"><col class="qty"><col class="grain"><col class="sel"><col class="tag"><col class="x"></colgroup>
           <thead><tr>
             <th></th><th>Name</th><th>Length</th><th>Width</th><th>Thick</th><th>Qty</th>
-            <th title="Grain lock: which part dimension runs along the stock grain">Grain</th><th>Kind</th><th>Material</th><th></th>
+            <th title="Which way the grain runs: along the part's length or width">Grain</th><th>Kind</th><th>Material</th><th></th>
           </tr></thead>
           <tbody>
             <template x-for="(row, i) in state.parts" :key="i">
@@ -179,8 +179,8 @@
           <colgroup><col class="num"><col class="sel"><col class="size"><col class="dim"><col class="dim"><col class="dim"><col class="onhand"><col class="edges"><col class="rough"><col class="mat"><col class="x"></colgroup>
           <thead><tr>
             <th></th><th>Kind</th><th>Size</th><th>Length</th><th>Width</th><th>Thick</th>
-            <th title="Pieces you have. 0 = buy as many as needed">On hand</th><th title="Click an edge to trim it">Trim</th>
-            <th title="Rough-sawn hardwood: jointed and planed">Rough</th><th>Material</th><th></th>
+            <th title="How many you have. 0 = buy what's needed">On hand</th><th title="Click an edge to trim it">Trim</th>
+            <th title="Rough-sawn: gets jointed and planed">Rough</th><th>Material</th><th></th>
           </tr></thead>
           <tbody>
             <template x-for="(row, i) in state.stock" :key="i">
@@ -243,7 +243,7 @@
 
         <template x-if="Object.keys(state.tag_aliases || {}).length || (state.tag_distinct || []).length">
           <div class="tagtable">
-            <h4>Remembered material decisions</h4>
+            <h4>Material matches you've set</h4>
             <ul class="decisions">
               <template x-for="[from, to] in Object.entries(state.tag_aliases)" :key="from">
                 <li><b x-text="from"></b> → <b x-text="to"></b> <button class="del" title="Forget" @click="forgetAlias(from)">×</button></li>
@@ -256,47 +256,83 @@
         </template>
       </div>
 
+      <div class="tip" x-show="tipBox.text" x-text="tipBox.text" :style="`left:${tipBox.x}px;top:${tipBox.y}px`"
+           @click.outside="tipBox.text = ''" @keydown.escape.window="tipBox.text = ''"></div>
       <!-- Settings -->
       <div class="panel settings" x-show="tab === 'settings'">
-        <h4>Kerf</h4>
-        <template x-for="[f, label, note] in [['track_saw_kerf', 'Track saw', state.settings.sheet_saw === 'table' ? '' : 'sheets'],
-                                              ['table_saw_kerf', 'Table saw', state.settings.sheet_saw === 'table' ? 'sheets, board rips' : 'board rips'],
-                                              ['miter_saw_kerf', 'Miter saw', 'board crosscuts'], ['jig_saw_kerf', 'Jig saw', 'rough boards into segments']]" :key="f">
-          <label><span><span x-text="label"></span> <span class="note" x-text="note"></span></span>
-            <input x-model="state.settings[f]" :class="cellClass('settings', 0, f)"></label>
-        </template>
-        <label>Sheets cut with
-          <select x-model="state.settings.sheet_saw"><option value="track">Track saw</option><option value="table">Table saw</option></select>
-        </label>
-        <h4>Allowances</h4>
-        <label><span>Edge trim <span class="note">each trimmed edge</span></span>
-          <input x-model="state.settings.edge_trim" :class="cellClass('settings', 0, 'edge_trim')"></label>
-        <label><span>Rough-cut oversize <span class="note">total, on length and on width</span></span>
-          <input x-model="state.settings.allowance" :class="cellClass('settings', 0, 'allowance')"></label>
-        <h4>Lumber</h4>
-        <template x-for="[f, label, note] in [['max_planing', 'Max planing', 'total off the thickness'], ['rough_cleanup', 'Rough cleanup', 'total off the thickness'],
-                                              ['edge_joint', 'Edge jointing', 'one edge'], ['min_planer_length', 'Min planer length', ''], ['snipe', 'Snipe', 'each end']]" :key="f">
-          <label><span><span x-text="label"></span> <span class="note" x-text="note"></span></span>
-            <input x-model="state.settings[f]" :class="cellClass('settings', 0, f)"></label>
-        </template>
-        <label><span>Dimensional lengths <span class="note">you can buy</span></span>
-          <input x-model="state.settings.dimensional_lengths" :class="cellClass('settings', 0, 'dimensional_lengths')"></label>
-        <label class="check"><input type="checkbox" x-model="state.settings.default_dimensional"> Assume standard dimensional lumber when no stock matches</label>
-        <h4>Extra</h4>
-        <template x-for="[f, label, note] in [['spare_sheets', 'Spare sheets', 'per kind of sheet'], ['spare_sticks', 'Spare sticks', 'per dimensional size'],
-                                              ['spare_pct', 'Spare hardwood pieces %', 'per group of identical pieces, rounded up'],
-                                              ['waste_pct', 'Extra board feet %', 'hardwood estimate: knots, checks, odd widths']]" :key="f">
-          <label><span><span x-text="label"></span> <span class="note" x-text="note"></span></span>
-            <input x-model="state.settings[f]" :class="cellClass('settings', 0, f)" inputmode="decimal"></label>
-        </template>
-        <h4>General</h4>
-        <label class="check"><input type="checkbox" x-model="state.settings.default_sheets"> Assume 4×8 sheets when no stock matches</label>
-        <label>Fraction precision
-          <select x-model.number="state.denominator"><option value="8">1/8"</option><option value="16">1/16"</option><option value="32">1/32"</option></select>
-        </label>
-        <label>Layouts to try <span x-text="state.settings.tries"></span>
-          <input type="range" min="0" max="5000" step="100" x-model.number="state.settings.tries">
-        </label>
+        <section>
+          <h4>Blade kerf</h4>
+          <template x-for="[f, label, note, tip] in [['track_saw_kerf', 'Track saw', state.settings.sheet_saw === 'table' ? '' : 'sheets', 'Blade width of track saw'],
+                                                ['table_saw_kerf', 'Table saw', state.settings.sheet_saw === 'table' ? 'sheets, board rips' : 'board rips', 'Blade width of table saw'],
+                                                ['miter_saw_kerf', 'Miter saw', 'board crosscuts', 'Blade width of miter saw'],
+                                                ['jig_saw_kerf', 'Jig saw', 'rough boards', 'Blade width of jig saw, used to cut rough boards into shorter pieces']]" :key="f">
+            <label class="row"><span><span x-text="label"></span><span class="info" x-show="tip" @click.prevent.stop="showTip($event, tip)">i</span><span class="note" x-text="note"></span></span>
+              <input x-model="state.settings[f]" :class="cellClass('settings', 0, f)"></label>
+          </template>
+          <label class="row"><span>Cut sheets on<span class="info" @click.prevent.stop="showTip($event, 'Which saw breaks down sheets')">i</span></span>
+            <select x-model="state.settings.sheet_saw"><option value="track">Track saw</option><option value="table">Table saw</option></select></label>
+        </section>
+
+        <section>
+          <h4>Trim and oversize</h4>
+          <template x-for="[f, label, note, tip] in [['edge_trim', 'Edge trim', 'per side', 'Cut off each stock edge marked in Trim column'],
+                                                ['sheet_allowance', 'Oversize: sheets', 'total, length and width', 'Cut sheet parts this much bigger, to trim to size later']]" :key="f">
+            <label class="row"><span><span x-text="label"></span><span class="info" x-show="tip" @click.prevent.stop="showTip($event, tip)">i</span><span class="note" x-text="note"></span></span>
+              <input x-model="state.settings[f]" :class="cellClass('settings', 0, f)"></label>
+          </template>
+        </section>
+
+        <section>
+          <h4>Planing</h4>
+          <template x-for="[f, label, note, tip] in [['max_planing', 'Max planing', 'total', 'Board can be at most this much thicker than part'],
+                                                ['rough_cleanup', 'Min planing, rough boards', 'total', 'Rough boards need at least this much planed off to come out flat'],
+                                                ['edge_joint', 'Edge jointing', 'one side', 'Taken off one edge of rough board on jointer'],
+                                                ['min_planer_length', 'Shortest piece to plane', '', 'Pieces shorter than this don\'t go through planer'],
+                                                ['snipe', 'Snipe', 'per end', 'Extra length on each end of planed piece, cut off after planing']]" :key="f">
+            <label class="row"><span><span x-text="label"></span><span class="info" x-show="tip" @click.prevent.stop="showTip($event, tip)">i</span><span class="note" x-text="note"></span></span>
+              <input x-model="state.settings[f]" :class="cellClass('settings', 0, f)"></label>
+          </template>
+        </section>
+
+        <section>
+          <h4>Dimensional lumber</h4>
+          <template x-for="[f, label, note, tip] in [['dimensional_lengths', 'Lengths sold', '', 'e.g. 8\', 10\', 12\'']]" :key="f">
+            <label class="row"><span><span x-text="label"></span><span class="info" x-show="tip" @click.prevent.stop="showTip($event, tip)">i</span><span class="note" x-text="note"></span></span>
+              <input x-model="state.settings[f]" :class="cellClass('settings', 0, f)"></label>
+          </template>
+          <label class="check"><input type="checkbox" x-model="state.settings.default_dimensional"> Buy standard sizes when Stock has none</label>
+        </section>
+
+        <section>
+          <h4>Hardwood shopping list</h4>
+          <template x-for="[f, label, note, tip] in [['combine_width', 'Join parts end to end', 'max width difference', 'Parts this close in width go end to end in one piece'],
+                                                ['combine_length', 'Longest joined piece', '', 'Parts end to end stop at this length'],
+                                                ['min_piece_width', 'Narrowest piece', '', 'Narrower parts go side by side in one piece, to rip apart'],
+                                                ['piece_extra_width', 'Extra width', 'total', 'Added to each piece to joint one edge and rip other']]" :key="f">
+            <label class="row"><span><span x-text="label"></span><span class="info" x-show="tip" @click.prevent.stop="showTip($event, tip)">i</span><span class="note" x-text="note"></span></span>
+              <input x-model="state.settings[f]" :class="cellClass('settings', 0, f)"></label>
+          </template>
+        </section>
+
+        <section>
+          <h4>Spares</h4>
+          <template x-for="[f, label, note, tip] in [['spare_sheets', 'Spare sheets', 'per kind', 'Extra sheets to buy of each kind'],
+                                                ['spare_sticks', 'Spare dimensional', 'per size', 'Extra dimensional lumber to buy of each size'],
+                                                ['spare_pct', 'Spare hardwood, %', 'per size', 'Extra hardwood pieces of each size, as a percent, rounded up'],
+                                                ['waste_pct', 'Yield loss, %', '', 'Added to the board-foot estimate to cover offcuts, since boards rarely match the pieces exactly']]" :key="f">
+            <label class="row"><span><span x-text="label"></span><span class="info" x-show="tip" @click.prevent.stop="showTip($event, tip)">i</span><span class="note" x-text="note"></span></span>
+              <input x-model="state.settings[f]" :class="cellClass('settings', 0, f)"></label>
+          </template>
+        </section>
+
+        <section>
+          <h4>General</h4>
+          <label class="check"><input type="checkbox" x-model="state.settings.default_sheets"> Buy 4×8 sheets when Stock has none</label>
+          <label class="row"><span>Round fractions to</span>
+            <select x-model.number="state.denominator"><option value="8">1/8"</option><option value="16">1/16"</option><option value="32">1/32"</option></select></label>
+          <label class="row wide"><span>Layouts to try<span class="info" @click.prevent.stop="showTip($event, 'More can find better cut list, but takes longer')">i</span> <span class="note" x-text="state.settings.tries"></span></span>
+            <input type="range" min="0" max="5000" step="100" x-model.number="state.settings.tries"></label>
+        </section>
       </div>
       <div class="panel output" x-show="tab === 'output'">
       <div class="status">
@@ -306,9 +342,9 @@
             <button :class="{on: state.settings.priority === 'waste'}" @click="state.settings.priority = 'waste'"
                     title="Keep the leftover in as few, large pieces as possible">Big leftovers</button>
             <button :class="{on: state.settings.priority === 'balanced'}" @click="state.settings.priority = 'balanced'"
-                    title="Fewer cuts unless it breaks up the leftover a lot">Balanced</button>
+                    title="Fewer cuts, unless that leaves only small offcuts">Balanced</button>
             <button :class="{on: state.settings.priority === 'cuts'}" @click="state.settings.priority = 'cuts'"
-                    title="Fewest saw steps and cuts: rip into strips, then crosscut">Simplest cutting</button>
+                    title="Fewest cuts: cut strips, then cut them to length">Simplest cutting</button>
           </div>
           <button class="ghost reopt" x-show="!busy && result && (result.ok || result.stale)" @click="reoptimize()">Re-optimize</button>
         </div>

@@ -26,7 +26,7 @@
   <template x-if="boardsLink">
     <section class="card">
       <h2>Boards from the yard</h2>
-      <p>In Plywood on your computer: Import ▾ → Boards from phone, and paste this link.</p>
+      <p>On your computer, paste this link into Plywood: Import ▾ → Boards from phone.</p>
       <button @click="copy(boardsLink)">Copy link</button>
     </section>
   </template>
@@ -34,7 +34,7 @@
   <template x-if="!job && !boardsLink">
     <section class="card">
       <h2>No job yet</h2>
-      <p>In Plywood on your computer: Export ▾ → Shopping list for phone, then scan the code.</p>
+      <p>On your computer, open Plywood's Shopping list tab, click Send to phone, and scan the code.</p>
     </section>
   </template>
 
@@ -47,7 +47,7 @@
           <span x-text="'Still to find: ' + plan.find.map(g => g.label).join(', ')"></span>
         </template>
         <template x-if="!busy && !plan.enough && !plan.find.length && plan.unplaced.length">
-          <span>Some parts don't fit</span>
+          <span>Some parts don't fit any board</span>
         </template>
       </div>
 
@@ -85,7 +85,7 @@
                   </p>
                   <ul class="blanks">
                     <template x-for="b in g.need.blanks">
-                      <li><b x-text="countText(b)"></b> × at least <b x-text="b.size"></b>
+                      <li><b x-text="b.count"></b> × at least <b x-text="b.size"></b>
                         <div class="muted" x-text="b.parts"></div></li>
                     </template>
                   </ul>

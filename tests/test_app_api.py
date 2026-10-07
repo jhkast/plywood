@@ -177,10 +177,26 @@ def test_hardwood_shopping_list(tmp_path):
     s = state_with([{"name": "leg", "length": "29", "width": "1-1/2", "thickness": "1-1/2", "qty": "4", "kind": "hardwood", "tag": "maple"}])
     r = api(tmp_path).optimize(s)
     assert r["ok"] and r["sheets"] == [] and r["stats"]["find"] == 4
-    # 29" + 4" snipe and a crosscut at each end; 1-1/2" + 1/16" jointed; 10% spare of 4 = 1
+    # Legs end to end up to 8' (3 × 29" + 2 kerfs, + 4" snipe and a crosscut at each end), and
+    # the two strips side by side, since a 2" board isn't a thing: 4" wide. 10% spare of 4 = 1.
     assert "<h4>8/4 maple</h4>" in r["shopping"]
-    assert '<td>4 + 1 spare</td><td>at least 37-1/4" × 1-9/16"</td><td>4 × leg</td>' in r["shopping"]
-    assert "about 5 (4.0 + 25%) bd ft" in r["shopping"]
+    assert '<td>1</td><td>at least 95-1/2" × 4"</td><td>4 × leg, 1 × leg (spare)</td>' in r["shopping"]
+    assert "about 7 (5.3 + 25%) bd ft" in r["shopping"]
+
+
+def test_similar_widths_share_a_piece(tmp_path):
+    hw = {"kind": "hardwood", "tag": "ash", "thickness": "1-3/4"}
+    s = state_with([dict(hw, name="upper rail", length="21", width="3-1/2", qty="2"),
+                    dict(hw, name="lower rail", length="21", width="4-1/4", qty="2"),
+                    dict(hw, name="slat", length="21", width="6", qty="1")])
+    s["settings"]["spare_pct"] = "0"
+    r = api(tmp_path).optimize(s)
+    # Rails within 1" share pieces, widest first, up to 8'; the 6" slat is too wide to join them.
+    assert '<td>1</td><td>at least 92-5/8" × 4-3/4"</td><td>2 × lower rail, 2 × upper rail</td>' in r["shopping"]
+    assert '<td>1</td><td>at least 29-1/4" × 6-1/2"</td><td>1 × slat</td>' in r["shopping"]
+    s["settings"]["combine_length"] = "6'"
+    r = api(tmp_path).optimize(s)
+    assert '<td>1</td><td>at least 71-1/2" × 4-3/4"</td><td>2 × lower rail, 1 × upper rail</td>' in r["shopping"]
 
 
 def test_extras_dont_change_the_layout(tmp_path):
@@ -216,3 +232,28 @@ def test_stock_csv_material_column_and_zero_qty(tmp_path):
     r = api(tmp_path).import_stock("length,width,thickness,qty,material,kind\n96,48,3/4,0,birch ply,sheet\n80,7,1,2,cherry,board\n")
     assert r["ok"]
     assert [(row["qty"], row["tag"], row["kind"]) for row in r["rows"]] == [("", "birch ply", "sheet"), ("2", "cherry", "hardwood")]
+
+
+def test_spares_per_size_named_by_what_the_parts_share(tmp_path):
+    hw = {"kind": "hardwood", "tag": "ash", "thickness": "1-3/4", "length": "32", "width": "5-3/8", "qty": "1"}
+    names = ["Back Left Leg - Back", "Back Left Leg - Front", "Front Right Leg - Back", "Front Right Leg - Front"]
+    r = api(tmp_path).optimize(state_with([dict(hw, name=n) for n in names]))
+    assert r["shopping"].count("(spare)") == 1 and "1 × Leg (spare)" in r["shopping"]
+
+
+def test_narrow_parts_share_a_board_side_by_side(tmp_path):
+    hw = {"kind": "hardwood", "tag": "ash", "thickness": "5/8", "width": "7/8"}
+    s = state_with([dict(hw, name="long ledger", length="41-1/2", qty="2"), dict(hw, name="short ledger", length="17", qty="2")])
+    s["settings"]["spare_pct"] = "0"
+    r = api(tmp_path).optimize(s)
+    # 7/8" strips: long ledgers end to end in one, short ones in another, side by side: 4" (the minimum)
+    assert '<td>1</td><td>at least 91-3/8" × 4"</td><td>2 × long ledger, 2 × short ledger</td>' in r["shopping"]
+
+
+def test_old_oversize_becomes_sheet_oversize(tmp_path):
+    import json
+
+    path = tmp_path / "state.json"
+    path.write_text(json.dumps({"settings": {"allowance": "1/4"}}))
+    st = Api(path).load_state()["settings"]
+    assert st["sheet_allowance"] == "1/4" and "allowance" not in st and "hardwood_allowance" not in st

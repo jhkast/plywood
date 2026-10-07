@@ -1,7 +1,7 @@
 // Keeps the page, its Python and Pyodide on the phone, so the list works with no signal.
 // Page files: served from the cache, refreshed in the background. CDN files: cache first.
 
-const CACHE = 'plywood-shop-2';
+const CACHE = 'plywood-shop-3';
 const PYODIDE = 'https://cdn.jsdelivr.net/pyodide/v314.0.7/full/';
 const FILES = [
   './', 'shop.js', 'shop.css', 'worker.js', 'plywood.zip', 'icon.svg', 'manifest.webmanifest',

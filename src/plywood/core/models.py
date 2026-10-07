@@ -91,7 +91,7 @@ class Settings:
     crosscut_kerf: float = 0.125 * INCH  # board crosscuts (miter saw)
     rough_crosscut_kerf: float = 0.125 * INCH  # cutting a rough board into segments (jig saw)
     edge_trim: float = 0.0  # removed from each trimmed edge (stock rows choose which edges)
-    allowance: float = 0.0  # rough-cut oversize, total per dimension (parts cut this much bigger)
+    sheet_allowance: float = 0.0  # rough-cut oversize for sheet parts, total per dimension
     thickness_tolerance: float = 0.5  # mm
     default_sheets: bool = True  # add unlimited 4x8 sheets for thicknesses with no stock
     default_dimensional: bool = True  # add standard dimensional sizes for parts with no stock
@@ -108,9 +108,18 @@ class Settings:
     spare_sticks: int = 1  # per dimensional size bought
     spare_pct: float = 10.0  # extra hardwood blanks per group of identical blanks, rounded up
     waste_pct: float = 25.0  # added to the hardwood board-foot estimate (defects, odd widths)
+    combine_width: float = 1 * INCH  # hardwood parts this close in width share a piece to find
+    combine_length: float = 96 * INCH  # longest piece to find made of several parts
+    piece_extra_width: float = 0.5 * INCH  # on each piece to find: joint one edge, rip the other
+    min_piece_width: float = 4 * INCH  # narrower parts share a piece side by side, to be ripped
     tries: int = 1000  # random layouts tried after the fixed sweep
     priority: str = "waste"  # after fewest sheets: "waste", "balanced", or "cuts"
     seed: int = 0  # same inputs + same seed = same layout
+
+    def allowance(self, kind) -> tuple[float, float]:
+        """Oversize added to a part's (length, width). Sheets only."""
+        a = self.sheet_allowance if kind == "sheet" else 0.0
+        return a, a
 
 
 # ---------------------------------------------------------------- results

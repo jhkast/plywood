@@ -3,7 +3,7 @@
  "job": "Cherry table",
  "units": "in",
  "denominator": 16,
- "settings": { "track_saw_kerf": "1/16", "table_saw_kerf": "1/8", "miter_saw_kerf": "1/8", "jig_saw_kerf": "1/16", "sheet_saw": "track", "edge_trim": "0", "allowance": "0" },
+ "settings": { "track_saw_kerf": "1/16", "table_saw_kerf": "1/8", "miter_saw_kerf": "1/8", "jig_saw_kerf": "1/16", "sheet_saw": "track", "edge_trim": "0", "sheet_allowance": "0" },
  "parts": [
   {"name": "leg", "length": "29", "width": "1-1/2", "thickness": "1-1/2", "qty": "4", "grain": "", "kind": "hardwood", "tag": "cherry"},
   {"name": "apron", "length": "30", "width": "3", "thickness": "3/4", "qty": "2", "grain": "", "kind": "hardwood", "tag": "cherry"},

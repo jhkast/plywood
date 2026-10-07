@@ -73,8 +73,9 @@ def prepare(parts: list[Part], stocks: list[Stock], settings: Settings) -> Job:
         if not matches:
             missing.append(Unplaced(part, part.qty, f"no {part.kind} stock with matching thickness/tag"))
             continue
-        a = settings.allowance
-        rough = replace(part, length=part.length + a, width=part.width + a) if a else part
+        al, aw = settings.allowance(part.kind)
+        a = al or aw
+        rough = replace(part, length=part.length + al, width=part.width + aw) if a else part
         allowed = frozenset(i for i in matches if fits_stock(rough, stocks[i], settings))
         if not allowed:
             missing.append(Unplaced(part, part.qty, "too large for matching stock (check grain lock)"))

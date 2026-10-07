@@ -115,7 +115,7 @@ def main(argv: list[str] | None = None) -> None:
             g = _window_geometry(webview)
             window = webview.create_window(
                 "Plywood", url, js_api=api, width=g["width"], height=g["height"], x=g["x"], y=g["y"],
-                maximized=g["maximized"], min_size=MIN_SIZE,
+                maximized=g["maximized"], min_size=MIN_SIZE, text_select=True,  # pywebview blocks selecting text by default
             )
             api._window = window
             maximized = [g["maximized"]]

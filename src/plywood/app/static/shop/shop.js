@@ -115,7 +115,7 @@ function shop() {
       } catch {
         return this.say("This link doesn't hold a Plywood job.", 'error');
       }
-      if (job.v !== 2) return this.say('This link is from an older Plywood. Make a new one on the computer.', 'error');
+      if (job.v !== 3) return this.say('This link is from an older Plywood. Make a new one on the computer.', 'error');
       this.job = job;
       this.id = hashOf(code);
       store.set('last', code);
@@ -180,11 +180,6 @@ function shop() {
       return g.waste_pct ? `about ${Math.round(g.board_feet_total)}` : String(g.board_feet);
     },
 
-    countText(b) {
-      if (!b.spares) return String(b.count);
-      return b.count ? `${b.count} + ${b.spares} spare` : `${b.spares} spare`;
-    },
-
     ticked(li) {
       return this.ticks[li] || 0;
     },
@@ -234,7 +229,7 @@ function shop() {
     },
 
     async sendBoards() {
-      const code = await encodeCode({ v: 2, job: this.job.job, units: this.job.units, boards: this.cart });
+      const code = await encodeCode({ v: 3, job: this.job.job, units: this.job.units, boards: this.cart });
       const link = location.origin + location.pathname + '#b=' + code;
       if (navigator.share) {
         try {

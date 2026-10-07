@@ -119,7 +119,10 @@ function migrateSettings(settings) {
       for (const k of Object.keys(OLD_KERFS)) s[k] = s.kerf;
     }
   }
-  for (const k of ['kerf', ...Object.values(OLD_KERFS), 'board_width', 'board_length', 'default_boards', 'time_budget']) delete s[k];
+  if ('allowance' in s && !('sheet_allowance' in s)) s.sheet_allowance = s.allowance; // one oversize for every kind
+  const lumberOversize = ['dimensional_allowance', 'hardwood_allowance', 'dimensional_allowance_length', 'dimensional_allowance_width',
+    'hardwood_allowance_length', 'hardwood_allowance_width'];
+  for (const k of ['kerf', ...Object.values(OLD_KERFS), 'allowance', ...lumberOversize, 'board_width', 'board_length', 'default_boards', 'time_budget']) delete s[k];
   return s;
 }
 
@@ -143,6 +146,7 @@ function plywood() {
     dimensionalNames: Object.keys(DIMENSIONAL),
     dialog: null, // 'phone' | 'boards' | 'ask'
     question: { title: '', buttons: [] }, // for dialog 'ask'
+    tipBox: { text: '', x: 0, y: 0 }, // a setting's explanation, shown by clicking its i
     phone: { code: '', link: '', qr: '' },
     boardsText: '',
     timers: {},
@@ -567,6 +571,11 @@ function plywood() {
     async changeUnits(to) {
       if (to === this.state.units) return;
       this.state = await api('convert_units', JSON.parse(JSON.stringify(this.state)), to);
+    },
+    showTip(e, text) {
+      const r = e.target.getBoundingClientRect();
+      const same = this.tipBox.text === text;
+      this.tipBox = same ? { text: '', x: 0, y: 0 } : { text, x: Math.min(r.left, window.innerWidth - 300), y: r.bottom + 6 };
     },
     // A question with buttons ([value, label, primary?]); resolves to the value clicked, or
     // 'cancel' for Esc or a click outside.

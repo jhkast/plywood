@@ -21,12 +21,13 @@ from plywood.core.optimize import optimize
 from plywood.core.units import Formatter, parse_length
 from plywood.render.report import buy_lines, find_lines, stock_label
 
-VERSION = 2  # 2: hardwood blanks instead of assumed boards
+VERSION = 3  # 3: hardwood pieces combine parts end to end
 PART_FIELDS = ("name", "length", "width", "thickness", "qty", "grain", "tag")
 STOCK_FIELDS = ("length", "width", "thickness", "qty", "trim_edges", "rough", "tag")
 SETTINGS = (
-    "table_saw_kerf", "miter_saw_kerf", "jig_saw_kerf", "edge_trim", "allowance", "max_planing",
-    "rough_cleanup", "edge_joint", "min_planer_length", "snipe", "spare_pct", "waste_pct", "tries", "priority",
+    "table_saw_kerf", "miter_saw_kerf", "jig_saw_kerf", "edge_trim", "max_planing",
+    "rough_cleanup", "edge_joint", "min_planer_length", "snipe", "spare_pct", "waste_pct", "combine_width",
+    "combine_length", "piece_extra_width", "min_piece_width", "tries", "priority",
 )
 
 
@@ -142,16 +143,23 @@ def replan(job: dict, cart: list[dict], tries: int | None = None) -> dict:
         return {"ok": False, "message": str(e)}
     # The spares on the original list have to be found too before it's "enough".
     by_name = {p.name: p for p in parts}
-    spares = [
-        replace(by_name[b["part"]], name=f"{b['part']} (spare)", qty=b["spares"], spare=True)
-        for g in job.get("find", []) for b in g.get("blanks", []) if b.get("spares") and b.get("part") in by_name
-    ]
+    wanted: Counter = Counter()
+    for g in job.get("find", []):
+        spare_of = g.get("spare_of") or {}
+        for b in g.get("blanks", []):
+            for label, n in (b.get("spares") or {}).items():
+                wanted[(label, spare_of.get(label, label))] += n
+    spares = [replace(by_name[part], name=f"{label} (spare)", qty=n, spare=True)
+              for (label, part), n in wanted.items() if part in by_name]
     result = optimize(parts + spares, stocks + cart_stock, settings)
     uses: dict[int, list[Layout]] = {}
     for lay in result.layouts:
         if lay.stock.name.startswith("cart "):
             uses.setdefault(int(lay.stock.name.split()[1]), []).append(lay)
     find = find_lines(result, fmt, spares=False)
+    initial = {g["key"]: g.get("spare_of", {}) for g in job.get("find", [])}
+    for g in find:
+        g["spare_of"] = initial.get(g["key"], {})
     unplaced = _unplaced(result)
     return {
         "ok": True,

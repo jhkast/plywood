@@ -42,6 +42,8 @@ DROPPED = ("time_budget", "board_width", "board_length", "default_boards")
 # Extras: shopping list only, so they never change (or re-run) the layout.
 EXTRAS = {"spare_sheets": 0, "spare_sticks": 1, "spare_pct": 10, "waste_pct": 25}
 DIMENSIONAL_LENGTHS = "8', 10', 12'"
+# Shopping list lengths: like EXTRAS, they never change the layout.
+SHOPPING_LENGTHS = {"combine_width": "1", "combine_length": "96", "piece_extra_width": "1/2", "min_piece_width": "4"}
 PHONE_URL = "https://jhkast.github.io/plywood/shop/"  # published by .github/workflows/pages.yml
 # Kerf per saw, with defaults in inches. Sheets go on the track saw or the table saw
 # (`sheet_saw`); board rips on the table saw, crosscuts on the miter saw, and rough boards are
@@ -51,7 +53,11 @@ KERFS = tuple(SAW_KERFS)
 # Older saves: a kerf per kind of cut (and before that one kerf for everything).
 OLD_KERFS = {"track_saw_kerf": "sheet_kerf", "table_saw_kerf": "rip_kerf", "miter_saw_kerf": "crosscut_kerf",
              "jig_saw_kerf": "rough_crosscut_kerf"}
-SETTING_LENGTHS = (*KERFS, "edge_trim", "allowance", *LUMBER_LENGTHS)
+ALLOWANCES = ("sheet_allowance",)
+# Oversize for lumber, from before it went away.
+OLD_ALLOWANCES = ("allowance", "dimensional_allowance", "hardwood_allowance", "dimensional_allowance_length",
+                  "dimensional_allowance_width", "hardwood_allowance_length", "hardwood_allowance_width")
+SETTING_LENGTHS = (*KERFS, "edge_trim", *ALLOWANCES, *LUMBER_LENGTHS, *SHOPPING_LENGTHS)
 
 
 def state_path() -> Path:
@@ -68,13 +74,14 @@ def default_state() -> dict:
         "settings": {
             **SAW_KERFS,
             "sheet_saw": "track",
-            "allowance": "0",
+            **{k: "0" for k in ALLOWANCES},
             "edge_trim": "0",
             "default_sheets": True,
             "default_dimensional": True,
             "dimensional_lengths": DIMENSIONAL_LENGTHS,
             **LUMBER_LENGTHS,
             **EXTRAS,
+            **SHOPPING_LENGTHS,
             "tries": 1000,
             "priority": "waste",
         },
@@ -264,7 +271,9 @@ def migrate_settings(settings: dict, old: dict) -> dict:
             settings["sheet_saw"] = "track"
         elif old.get("kerf"):
             settings.update({k: old["kerf"] for k in SAW_KERFS})
-    for k in ("kerf", *OLD_KERFS.values()):
+    if "allowance" in old and "sheet_allowance" not in old:  # one oversize for every kind
+        settings["sheet_allowance"] = old["allowance"]
+    for k in ("kerf", *OLD_KERFS.values(), *OLD_ALLOWANCES):
         settings.pop(k, None)
     return settings
 
@@ -281,7 +290,7 @@ def inputs_key(parts: list[Part], stocks: list[Stock], settings: Settings) -> st
             return [clean(x) for x in v]
         return v
 
-    layout = {k: v for k, v in asdict(settings).items() if k not in EXTRAS}
+    layout = {k: v for k, v in asdict(settings).items() if k not in EXTRAS and k not in SHOPPING_LENGTHS}
     data = clean([[asdict(p) for p in parts], [asdict(s) for s in stocks], layout])
     return hashlib.sha1(json.dumps(data, sort_keys=True).encode()).hexdigest()[:16]
 
@@ -339,7 +348,7 @@ class Api:
                     row["kind"] = "hardwood"
             if state.get("units") == "mm":  # new settings arrive with inch defaults
                 mm = Formatter("mm")
-                for field, default in {**LUMBER_LENGTHS, **SAW_KERFS}.items():
+                for field, default in {**LUMBER_LENGTHS, **SAW_KERFS, **SHOPPING_LENGTHS}.items():
                     migrated = field in SAW_KERFS and (old.get("kerf") or OLD_KERFS[field] in old)
                     if field not in old and not migrated:
                         state["settings"][field] = mm.exact(parse_length(default, "in"))
