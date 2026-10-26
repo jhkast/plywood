@@ -64,6 +64,12 @@ p { margin: 4px 0; }
 
 .message { padding: 10px 12px; border-radius: 8px; background: var(--ok-bg); margin: 0 0 8px; }
 .message.error { background: var(--bad-bg); }
+.tabs { display: flex; gap: 4px; margin-bottom: 12px; border-bottom: 1px solid var(--line); }
+.tabs button { border: 0; border-bottom: 2px solid transparent; border-radius: 0; background: none; color: var(--muted); padding: 10px 12px; }
+.tabs button.on { color: var(--text); border-bottom-color: var(--accent); font-weight: 600; }
+.tabs .count { color: var(--muted); font-weight: 400; }
+.part { display: flex; justify-content: space-between; gap: 12px; padding: 8px 2px; border-bottom: 1px solid var(--line); }
+.part .muted { white-space: nowrap; }
 .status { padding: 12px 14px; border-radius: 10px; background: var(--warn-bg); font-weight: 600; }
 .status.enough { background: var(--ok-bg); color: var(--ok); }
 .status.busy { background: var(--panel); color: var(--muted); font-weight: 400; }

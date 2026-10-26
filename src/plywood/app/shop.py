@@ -75,9 +75,14 @@ def job_payload(state: dict, result: Result, fmt: Formatter) -> dict:
     """What the phone needs: the shopping list, plus the hardwood parts and stock to re-plan with."""
     s = state.get("settings", {})
 
+    def filled(rows):
+        return [r for r in rows if any(str(r.get(k, "")).strip() for k in ("length", "width", "thickness"))]
+
     def boards(rows):
-        return [r for r in rows if StockKind.parse(r.get("kind")) == StockKind.HARDWOOD
-                and any(str(r.get(k, "")).strip() for k in ("length", "width", "thickness"))]
+        return [r for r in filled(rows) if StockKind.parse(r.get("kind")) == StockKind.HARDWOOD]
+
+    def others(rows):  # for the phone's parts list only
+        return [r for r in filled(rows) if StockKind.parse(r.get("kind")) != StockKind.HARDWOOD]
 
     return {
         "v": VERSION,
@@ -88,6 +93,7 @@ def job_payload(state: dict, result: Result, fmt: Formatter) -> dict:
         "aliases": state.get("tag_aliases") or {},
         "parts": [[r.get(f, "") for f in PART_FIELDS] for r in boards(state.get("parts", []))],
         "stock": [[r.get(f, "") for f in STOCK_FIELDS] for r in boards(state.get("stock", []))],
+        "others": [[*(r.get(f, "") for f in PART_FIELDS), str(StockKind.parse(r.get("kind")))] for r in others(state.get("parts", []))],
         "buy": buy_lines(result, fmt),
         "find": find_lines(result, fmt),
         "unplaced": _unplaced(result),

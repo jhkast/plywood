@@ -95,3 +95,9 @@ def test_python_zip_has_what_the_phone_needs():
     names = zipfile.ZipFile(io.BytesIO(python_zip())).namelist()
     assert "plywood/app/shop.py" in names and "plywood/core/optimize.py" in names
     assert "plywood/app/desktop.py" not in names and not any("__pycache__" in n for n in names)
+
+
+def test_payload_lists_every_part_for_the_phone(tmp_path):
+    side = {"name": "side", "length": "30", "width": "20", "thickness": "3/4", "qty": "2", "kind": "sheet", "tag": "birch ply"}
+    job = job_from(cherry_state([side]), tmp_path)
+    assert job["others"] == [["side", "30", "20", "3/4", "2", "", "birch ply", "sheet"]]

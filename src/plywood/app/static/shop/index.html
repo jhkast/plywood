@@ -40,6 +40,23 @@
 
   <template x-if="job">
     <div>
+      <nav class="tabs">
+        <button :class="{on: view === 'shop'}" @click="view = 'shop'">Shopping list</button>
+        <button :class="{on: view === 'parts'}" @click="view = 'parts'">Parts <span class="count" x-text="partCount()"></span></button>
+      </nav>
+
+      <div x-show="view === 'parts'">
+        <template x-for="g in partGroups()" :key="g.label">
+          <section>
+            <h2 x-text="g.label"></h2>
+            <template x-for="p in g.parts">
+              <div class="part"><span><b x-text="p.qty"></b> × <span x-text="p.name"></span></span><span class="muted" x-text="p.size"></span></div>
+            </template>
+          </section>
+        </template>
+      </div>
+
+      <div x-show="view === 'shop'">
       <div class="status" :class="{enough: plan.enough, busy: busy}">
         <template x-if="busy"><span x-text="plan.complete === false && plan.cart.length === cart.length ? 'Checking more layouts…' : 'Planning…'"></span></template>
         <template x-if="!busy && plan.enough"><span>✓ You have enough boards</span></template>
@@ -125,8 +142,10 @@
         </section>
       </template>
 
+      </div>
+
       <footer>
-        <button class="primary" x-show="cart.length" @click="sendBoards()">Send boards to computer</button>
+        <button class="primary" x-show="cart.length && view === 'shop'" @click="sendBoards()">Send boards to computer</button>
         <span class="muted offline" x-text="offlineText()"></span>
       </footer>
     </div>

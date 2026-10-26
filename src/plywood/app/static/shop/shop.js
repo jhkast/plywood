@@ -92,6 +92,7 @@ function shop() {
     messageKind: '',
     boardsLink: '',
     pythonReady: false,
+    view: 'shop', // 'shop' | 'parts'
     offline: false,
 
     async init() {
@@ -174,6 +175,27 @@ function shop() {
       const mark = this.unitMark() === 'mm' ? ' mm' : '"';
       const len = (v) => (/^[\d.\-\/ ]+$/.test(v) ? v + mark : v); // 8' stays 8'
       return `${len(b.length)} × ${len(b.width)} × ${q ? q.label : b.thickness}${b.rough ? '' : ' surfaced'}`;
+    },
+
+    // Every part in the job, by kind and material.
+    partGroups() {
+      if (!this.job) return [];
+      const rows = [...this.job.parts.map((r) => [...r, 'hardwood']), ...(this.job.others || [])];
+      const groups = new Map();
+      for (const [name, length, width, thickness, qty, , tag, kind] of rows) {
+        const label = kind + (tag ? ' · ' + tag : '');
+        if (!groups.has(label)) groups.set(label, { label, parts: [] });
+        const size = [length, width, thickness].map((v) => this.withUnit(String(v))).join(' × ');
+        groups.get(label).parts.push({ name, qty: Number(qty) || 1, size });
+      }
+      return [...groups.values()];
+    },
+    partCount() {
+      return this.partGroups().reduce((n, g) => n + g.parts.reduce((m, p) => m + p.qty, 0), 0) || '';
+    },
+    withUnit(v) {
+      const mark = this.unitMark() === 'mm' ? ' mm' : '"';
+      return /^[\d.\-\/ ]+$/.test(v) ? v + mark : v;
     },
 
     feet(g) {
