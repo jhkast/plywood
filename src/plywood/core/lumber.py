@@ -37,7 +37,7 @@ def _segment_size(item: Instance, partner: Instance | None, b: Bin, settings: Se
         inner += settings.crosscut_kerf + _along(partner, b)[0]
     if not needs_planing(item.part, b.stock, settings):
         return inner, inner
-    margin = 2 * (settings.snipe + settings.crosscut_kerf) if settings.snipe > 0 else 0.0
+    margin = 2 * settings.snipe  # the cuts that take the snipe off come out of it
     inner = max(inner, settings.min_planer_length - margin)
     return inner, inner + margin
 
@@ -109,7 +109,7 @@ def _add_segment(
     if planed:
         mark_segment(b, seg, item.part.thickness, stock.rough, inset)
         if settings.snipe > 0:
-            left, rest_of = b._cut(seg, "V", settings.snipe)
+            left, rest_of = b._cut(seg, "V", max(settings.snipe - settings.crosscut_kerf, 0.0))
             b.free.append(left)
             assert rest_of is not None
             region, right = b._cut(rest_of, "V", inner)

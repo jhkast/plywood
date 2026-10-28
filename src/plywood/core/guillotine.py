@@ -185,7 +185,12 @@ class Packing:
         steps = sum(b.steps() for b in self.bins)
         # Waste is fixed once the stock is chosen, so it only matters when on-hand pieces differ.
         planed = sum(b.planed for b in self.bins)  # exact thickness beats planing; fewer planer runs
-        head = (len(self.unplaced), len(purchased), planed, round(waste, 3))
+        # Anything left out: real parts before spares, and the shortest first (long parts are the
+        # hard ones to find), so a 72" top beats a leg and two rails on an 80" board.
+        left_out = lambda spare: tuple(sorted((round(it.part.length, 1) for it in self.unplaced  # noqa: E731
+                                               if it.part.spare == spare), reverse=True))
+        missing = (left_out(False), left_out(True))
+        head = (missing, len(purchased), planed, round(waste, 3))
         if priority == "cuts":
             return (*head, steps + cuts, -round(largest_free, 4))
         if priority == "balanced":

@@ -42,7 +42,7 @@ def test_payload_has_board_parts_only_and_the_shopping_list(tmp_path):
     assert job["buy"] == [{"label": '3/4" birch ply · 96" × 48"', "count": 1, "spares": 0}]
     assert [g["label"] for g in job["find"]] == ["4/4 cherry", "8/4 cherry"]
     legs = next(g for g in job["find"] if g["label"] == "8/4 cherry")
-    assert legs["blanks"] == [{"count": 1, "size": '95-1/2" × 4"', "parts": "4 × leg, 1 × leg (spare)", "spares": {"leg": 1}}]
+    assert legs["blanks"] == [{"count": 1, "size": '95-1/4" × 4"', "parts": "4 × leg, 1 × leg (spare)", "spares": {"leg": 1}}]
 
 
 def test_replan_with_empty_cart_matches_the_desktop(tmp_path):
@@ -101,3 +101,20 @@ def test_payload_lists_every_part_for_the_phone(tmp_path):
     side = {"name": "side", "length": "30", "width": "20", "thickness": "3/4", "qty": "2", "kind": "sheet", "tag": "birch ply"}
     job = job_from(cherry_state([side]), tmp_path)
     assert job["others"] == [["side", "30", "20", "3/4", "2", "", "birch ply", "sheet"]]
+
+
+def test_yard_boards_cover_the_long_parts(tmp_path):
+    # From the yard: tops 72" × 4" × 1-27/64" and 32" legs, 8/4 ash, boards cut to fit the truck.
+    hw = {"kind": "hardwood", "tag": "ash", "grain": "length"}
+    s = default_state()
+    s["parts"] = [dict(hw, name="top", length="72", width="4", thickness="1-27/64", qty="2"),
+                  dict(hw, name="leg", length="32", width="5-3/8", thickness="1-3/4", qty="2"),
+                  dict(hw, name="rail", length="21", width="4-1/4", qty="3", thickness="1-3/4")]
+    job = job_from(s, tmp_path)
+    for surfaced in (False, True):  # planed both faces (not rough) or rough: either makes a top
+        board = {"length": "80", "width": "6", "thickness": "1-3/4" if surfaced else "2", "tag": "ash", "rough": not surfaced}
+        r = shop.replan(job, [board, dict(board, length="41")])
+        assert r["ok"]
+        # 80" = 72" top + 4" snipe each end; the 41" board takes a real leg, not a spare or a rail
+        assert r["cart"][0]["parts"][0].startswith("1 × top ·"), r["cart"]
+        assert r["cart"][1]["parts"][0].startswith("1 × leg ·"), r["cart"]

@@ -30,17 +30,18 @@ def _norm_tag(tag: str | None) -> str | None:
 
 
 def thickness_ok(part: Part, stock: Stock, settings: Settings) -> bool:
-    """Sheets: the same thickness. Boards: the same or up to `max_planing` thicker. A rough board:
-    at least `rough_cleanup` thicker, and up to `max_planing` thicker or the standard rough
-    thickness for the part, whichever is more (8/4 for 1-1/2" legs). A board to find: that
-    standard thickness."""
+    """Sheets: the same thickness. Dimensional: the same or up to `max_planing` thicker.
+    Hardwood: up to `max_planing` thicker or the standard rough thickness for the part, whichever
+    is more (an 8/4 board, planed or not, for 1-1/2" legs); a rough board at least
+    `rough_cleanup` thicker."""
     tol = settings.thickness_tolerance
     extra = stock.thickness - part.thickness
     if stock.kind == StockKind.SHEET:
         return abs(extra) <= tol
-    standard = _quarters(part, settings) * INCH / 4
-    if stock.rough:
-        return settings.rough_cleanup - tol <= extra <= max(settings.max_planing, standard - part.thickness) + tol
+    if stock.kind == StockKind.HARDWOOD:
+        most = max(settings.max_planing, _quarters(part, settings) * INCH / 4 - part.thickness)
+        least = settings.rough_cleanup if stock.rough else 0.0
+        return least - tol <= extra <= most + tol
     return -tol <= extra <= settings.max_planing + tol
 
 
@@ -138,7 +139,7 @@ def fits_stock(part: Part, stock: Stock, settings: Settings) -> bool:
     if needs_planing(part, stock, settings):
         if length < settings.min_planer_length - 1e-6:
             return False
-        length -= 2 * (settings.snipe + settings.crosscut_kerf)
+        length -= 2 * settings.snipe
         if stock.rough:
             width -= settings.edge_joint
     for rotated in allowed_rotations(part, stock.kind):

@@ -41,9 +41,8 @@ class Strip:
 
     def length(self, settings: Settings) -> float:
         """With a crosscut between parts and snipe at each end, and at least the planer's minimum."""
-        k = settings.crosscut_kerf
-        run = sum(self.lengths) + k * (len(self.lengths) - 1)
-        return max(run + 2 * (settings.snipe + k), settings.min_planer_length)
+        run = sum(self.lengths) + settings.crosscut_kerf * (len(self.lengths) - 1)
+        return max(run + 2 * settings.snipe, settings.min_planer_length)
 
 
 @dataclass

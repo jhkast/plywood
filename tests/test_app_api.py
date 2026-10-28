@@ -180,7 +180,7 @@ def test_hardwood_shopping_list(tmp_path):
     # Legs end to end up to 8' (3 × 29" + 2 kerfs, + 4" snipe and a crosscut at each end), and
     # the two strips side by side, since a 2" board isn't a thing: 4" wide. 10% spare of 4 = 1.
     assert "<h4>8/4 maple</h4>" in r["shopping"]
-    assert '<td>1</td><td>at least 95-1/2" × 4"</td><td>4 × leg, 1 × leg (spare)</td>' in r["shopping"]
+    assert '<td>1</td><td>at least 95-1/4" × 4"</td><td>4 × leg, 1 × leg (spare)</td>' in r["shopping"]
     assert "about 7 (5.3 + 25%) bd ft" in r["shopping"]
 
 
@@ -192,11 +192,11 @@ def test_similar_widths_share_a_piece(tmp_path):
     s["settings"]["spare_pct"] = "0"
     r = api(tmp_path).optimize(s)
     # Rails within 1" share pieces, widest first, up to 8'; the 6" slat is too wide to join them.
-    assert '<td>1</td><td>at least 92-5/8" × 4-3/4"</td><td>2 × lower rail, 2 × upper rail</td>' in r["shopping"]
-    assert '<td>1</td><td>at least 29-1/4" × 6-1/2"</td><td>1 × slat</td>' in r["shopping"]
+    assert '<td>1</td><td>at least 92-3/8" × 4-3/4"</td><td>2 × lower rail, 2 × upper rail</td>' in r["shopping"]
+    assert '<td>1</td><td>at least 29" × 6-1/2"</td><td>1 × slat</td>' in r["shopping"]
     s["settings"]["combine_length"] = "6'"
     r = api(tmp_path).optimize(s)
-    assert '<td>1</td><td>at least 71-1/2" × 4-3/4"</td><td>2 × lower rail, 1 × upper rail</td>' in r["shopping"]
+    assert '<td>1</td><td>at least 71-1/4" × 4-3/4"</td><td>2 × lower rail, 1 × upper rail</td>' in r["shopping"]
 
 
 def test_extras_dont_change_the_layout(tmp_path):
@@ -247,7 +247,7 @@ def test_narrow_parts_share_a_board_side_by_side(tmp_path):
     s["settings"]["spare_pct"] = "0"
     r = api(tmp_path).optimize(s)
     # 7/8" strips: long ledgers end to end in one, short ones in another, side by side: 4" (the minimum)
-    assert '<td>1</td><td>at least 91-3/8" × 4"</td><td>2 × long ledger, 2 × short ledger</td>' in r["shopping"]
+    assert '<td>1</td><td>at least 91-1/8" × 4"</td><td>2 × long ledger, 2 × short ledger</td>' in r["shopping"]
 
 
 def test_old_oversize_becomes_sheet_oversize(tmp_path):
